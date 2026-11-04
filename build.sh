@@ -11,11 +11,11 @@ pack() { # <source dir> <pbo name> <prefix>
   python3 tools/pbo.py pack "$1" "$OUT/Addons/$2.pbo" --prefix "$3"
 }
 
-# COT fork (paths/prefixes unchanged so Expansion's COT integration keeps working)
-pack cot/JM/COT/Scripts      JM_COT_Scripts      'JM\COT\Scripts'
-pack cot/JM/COT/GUI          JM_COT_GUI          'JM\COT\GUI'
-pack cot/JM/COT/languagecore JM_COT_LanguageCore 'JM\COT\languagecore'
-pack cot/JM/COT/Objects/Debug JM_COT_Objects_Debug 'JM\COT\Objects\Debug'
+# COT fork. File names are HOD; internal prefixes + CfgPatches stay COT's so Expansion's COT integration keeps working
+pack cot/JM/COT/Scripts       HOD_AdminTools_Core     'JM\COT\Scripts'
+pack cot/JM/COT/GUI           HOD_AdminTools_GUI      'JM\COT\GUI'
+pack cot/JM/COT/languagecore  HOD_AdminTools_Language 'JM\COT\languagecore'
+pack cot/JM/COT/Objects/Debug HOD_AdminTools_Objects  'JM\COT\Objects\Debug'
 
 # HOD addon
 if [ -d hod/HOD_AdminTools ]; then

@@ -14,6 +14,8 @@ WHAT THIS IS
 INSTALL
  1. REMOVE the official @Community-Online-Tools from -mod= (they can't both load).
  2. Keep @CF. Add @HOD_AdminTools to -mod= on server and clients.
+    Addons/ holds 5 PBOs, all named HOD_AdminTools*.pbo. When updating from 0.2.6 or
+    older, DELETE any JM_COT_*.pbo files first (same addons under old names).
       -mod=@CF;@DayZ-Expansion-...;@HOD_AdminTools
  3. Your existing COT config carries over: same profile folder (CommunityOnlineTools),
     same permissions/roles files.
