@@ -104,9 +104,55 @@ class HOD_ObjectBuilderForm : JMFormBase
 		}
 	}
 
+	// HOD: columns and lists follow the window size (drag-resize or title-bar double-click)
+	override void OnResize(float w, float h)
+	{
+		super.OnResize(w, h);
+		HOD_Layout(w, h);
+	}
+
+	protected void Place(string name, float x, float y, float w, float h)
+	{
+		Widget wd = layoutRoot.FindAnyWidget(name);
+		if (!wd)
+			return;
+		wd.SetPos(x, y);
+		wd.SetSize(w, h);
+	}
+
+	protected void HOD_Layout(float w, float h)
+	{
+		if (w < 600 || h < 400)
+			return;
+		float gap = 10;
+		float colL = (w - gap * 2) * 0.31;
+		float colM = (w - gap * 2) * 0.34;
+		float colR = w - gap * 2 - colL - colM;
+		float xM = colL + gap;
+		float xR = xM + colM + gap;
+
+		float setsListH = Math.Max(120, h - 64 - 130);
+		Place("sets_header", 0, 0, colL, 30);
+		Place("sets_list", 5, 64, colL - 10, setsListH);
+		Place("sets_wrapper", 0, 68 + setsListH, colL, 30);
+
+		float objListH = Math.Max(150, h - 34 - 175);
+		Place("objects_header", xM, 0, colM, 30);
+		Place("objects_list", xM + 5, 34, colM - 10, objListH);
+		Place("objects_wrapper", xM, 38 + objListH, colM, 30);
+
+		float classH = Math.Max(120, h - 34 - 350);
+		Place("search_wrapper", xR, 0, colR, 30);
+		Place("class_list", xR + 5, 34, colR - 10, classH);
+		Place("edit_wrapper", xR, 38 + classH, colR, 30);
+	}
+
 	override void OnShow()
 	{
 		super.OnShow();
+		float lw, lh;
+		layoutRoot.GetSize(lw, lh);
+		HOD_Layout(lw, lh);
 		m_Module.Client_RequestList();
 		if (m_Module.m_ClientSet)
 			m_Module.Client_OpenSet(m_Module.m_ClientSet.name);

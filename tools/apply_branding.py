@@ -40,6 +40,9 @@ PALETTE = {
     "8F999F": "8F998F",
     "B8C4CA": "B8C4B9",
     "ECF9FF": "EEF6EC",
+    "0F1216": "0E120F",
+    "161B22": "151B16",
+    "33404C": "334036",
 }
 PAL = {int(k, 16): int(v, 16) for k, v in PALETTE.items()}
 
@@ -99,6 +102,61 @@ def layout_sub(s):
     return re.sub(r"(\bcolor )([0-9.]+ [0-9.]+ [0-9.]+(?: [0-9.]+)?)", f, s)
 
 
+GOLD_F = "0.831 0.686 0.216"
+HOD_LOGO_BLOCK = """    ImageWidgetClass HODLogo {
+     visible 1
+     ignorepointer 1
+     color 1 1 1 1
+     position 6 0
+     size 44 0.9
+     halign right_ref
+     valign center_ref
+     hexactpos 1
+     vexactpos 0
+     hexactsize 1
+     vexactsize 0
+     image0 "HOD_AdminTools/GUI/textures/hod_logo_small.paa"
+     mode blend
+     "src alpha" 1
+     "no wrap" 1
+     stretch 1
+    }
+"""
+
+
+def set_widget_color(path, widget, rgb, alpha=None):
+    """Replace the first `color` line inside `<Class> widget {` (before its first child block)."""
+    if not os.path.exists(path):
+        print("MISSING FILE", path); return
+    s = rd(path)
+    m = re.search(r"WidgetClass " + re.escape(widget) + r" \{\n", s)
+    if not m:
+        print("NOT FOUND widget", widget, "in", path); return
+    end = s.find("{", m.end())
+    end = len(s) if end < 0 else end
+    seg = s[m.end():end]
+    cm = re.search(r"(\bcolor )([0-9.]+ [0-9.]+ [0-9.]+)( [0-9.]+)?", seg)
+    if not cm:
+        print("no color line on", widget); return
+    a = cm.group(3) if alpha is None else " " + alpha
+    new = cm.group(1) + rgb + (a or "")
+    seg = seg[:cm.start()] + new + seg[cm.end():]
+    wr(path, s[:m.end()] + seg + s[end:])
+
+
+def layout_edits():
+    sb = os.path.join(ROOT, "GUI/layouts/sidebar_menu.layout")
+    wb = os.path.join(ROOT, "GUI/layouts/windowbase.layout")
+    set_widget_color(sb, "TitleBarText", GOLD_F, "1")
+    set_widget_color(sb, "TitleBarRule", GOLD_F, "0.6")
+    set_widget_color(wb, "title_accent", GOLD_F, "1")
+    if os.path.exists(sb):
+        s = rd(sb)
+        if "HODLogo" not in s and "    PanelWidgetClass TitleBarRule {" in s:
+            s = s.replace("    PanelWidgetClass TitleBarRule {", HOD_LOGO_BLOCK + "    PanelWidgetClass TitleBarRule {", 1)
+            wr(sb, s)
+
+
 def main():
     changed = 0
     for p in glob.glob(os.path.join(ROOT, "Scripts/**/*.c"), recursive=True):
@@ -132,6 +190,8 @@ def main():
         if a not in s:
             print("NOT FOUND", rel, a[:50]); continue
         wr(p, s.replace(a, b))
+
+    layout_edits()
 
     st = os.path.join(ROOT, "languagecore/stringtable.csv")
     s = rd(st)

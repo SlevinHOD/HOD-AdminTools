@@ -34,6 +34,42 @@ class HOD_XMLSearchForm : JMFormBase
 		UIActionManager.CreateButton(btns, "Copy XML block", this, "Click_CopyXml");
 	}
 
+	// HOD: results list and details follow the window size
+	override void OnResize(float w, float h)
+	{
+		super.OnResize(w, h);
+		HOD_Layout(w, h);
+	}
+
+	override void OnShow()
+	{
+		super.OnShow();
+		float lw, lh;
+		layoutRoot.GetSize(lw, lh);
+		HOD_Layout(lw, lh);
+	}
+
+	protected void HOD_Layout(float w, float h)
+	{
+		if (w < 500 || h < 300)
+			return;
+		Widget top = layoutRoot.FindAnyWidget("xml_search");
+		Widget det = layoutRoot.FindAnyWidget("xml_details");
+		float listW = w * 0.5 - 10;
+		if (top)
+			top.SetSize(w, 30);
+		if (m_Results)
+		{
+			m_Results.SetPos(5, 64);
+			m_Results.SetSize(listW, h - 70);
+		}
+		if (det)
+		{
+			det.SetPos(listW + 15, 64);
+			det.SetSize(w - listW - 20, 30);
+		}
+	}
+
 	void Change_Search(UIEvent eid, UIActionBase action)
 	{
 		// search as you type (CHANGE is already debounced by UIActionEditableText)

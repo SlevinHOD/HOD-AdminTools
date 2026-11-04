@@ -1,7 +1,7 @@
 PanelWidgetClass lab_anchor {
  ignorepointer 1
  visible 1
- color 0.2 0.25 0.3 0.35
+ color 0.200 0.251 0.212 0.35
  position 0 0
  size 1 260
  halign left_ref

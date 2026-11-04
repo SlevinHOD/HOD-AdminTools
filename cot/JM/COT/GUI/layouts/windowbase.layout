@@ -70,7 +70,7 @@ PanelWidgetClass base_window {
     PanelWidgetClass title_accent {
      ignorepointer 1
      visible 0
-     color 0.180 0.620 0.290 1.000
+     color 0.831 0.686 0.216 1
      position 0 0
      size 1 2
      hexactpos 1

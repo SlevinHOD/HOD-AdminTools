@@ -30,7 +30,7 @@ class JMESPWidgetHandler: COT_ScriptedWidgetEventHandler
 	//! dark tag ground, and the row flips to a light one instead.
 	static const float ROW_DARK_LUMA = 0.38;
 	static const int ROW_BG_LIGHT   = 0xFBEEF6EC;
-	static const int ROW_FG_ONLIGHT = 0xFF161B22;
+	static const int ROW_FG_ONLIGHT = 0xFF151B16;
 
 	//! esp_widget.layout's own authored `color` on the root panel -
 	//! the one widget in this tree confirmed to actually paint (it carries

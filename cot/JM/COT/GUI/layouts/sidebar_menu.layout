@@ -26,7 +26,7 @@ PanelWidgetClass JMCOTSideBar {
    {
     TextWidgetClass TitleBarText {
      visible 1
-     color 1 1 1 1
+     color 0.831 0.686 0.216 1
      position 0 0.2
      size 1 0.8
      halign center_ref
@@ -38,10 +38,28 @@ PanelWidgetClass JMCOTSideBar {
      "text halign" left
      "text offset" 6 0
     }
+    ImageWidgetClass HODLogo {
+     visible 1
+     ignorepointer 1
+     color 1 1 1 1
+     position 6 0
+     size 44 0.9
+     halign right_ref
+     valign center_ref
+     hexactpos 1
+     vexactpos 0
+     hexactsize 1
+     vexactsize 0
+     image0 "HOD_AdminTools/GUI/textures/hod_logo_small.paa"
+     mode blend
+     "src alpha" 1
+     "no wrap" 1
+     stretch 1
+    }
     PanelWidgetClass TitleBarRule {
      visible 1
      ignorepointer 1
-     color 0.933 0.965 0.925 0.149
+     color 0.831 0.686 0.216 0.6
      position 0 0
      size 1 1
      halign left_ref
@@ -57,7 +75,7 @@ PanelWidgetClass JMCOTSideBar {
   PanelWidgetClass Footer {
    visible 1
    ignorepointer 1
-   color 0.059 0.071 0.086 0.980
+   color 0.055 0.071 0.059 0.980
    position 0 0
    size 1 152
    halign center_ref
