@@ -2,6 +2,8 @@
 
 House of D admin tools for DayZ. Written from scratch (no VPP or COT code), Expansion-aware.
 
+Code: CC BY-SA 4.0. HOD branding: all rights reserved. See [NOTICE.md](NOTICE.md).
+
 ![menu preview](docs/menu_preview.png)
 
 ## Build (Linux, no DayZ Tools needed)
