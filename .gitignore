@@ -1,0 +1,3 @@
+dist/
+*.biprivatekey
+__pycache__/

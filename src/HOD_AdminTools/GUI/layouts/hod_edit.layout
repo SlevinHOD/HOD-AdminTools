@@ -1,0 +1,40 @@
+PanelWidgetClass hod_edit_bg {
+ ignorepointer 1
+ color 0.05 0.06 0.05 1
+ position 0 0
+ size 200 28
+ hexactpos 1
+ vexactpos 1
+ hexactsize 1
+ vexactsize 1
+ style rover_sim_colorable
+ {
+  PanelWidgetClass hod_edit_line {
+   ignorepointer 1
+   color 0.831 0.686 0.216 0.8
+   position 0 0
+   size 1 1
+   valign bottom_ref
+   hexactpos 1
+   vexactpos 1
+   hexactsize 0
+   vexactsize 1
+   style rover_sim_colorable
+  }
+  EditBoxWidgetClass hod_edit_box {
+   ignorepointer 0
+   color 1 1 1 1
+   position 6 0
+   size 0.97 1
+   hexactpos 1
+   vexactpos 1
+   hexactsize 0
+   vexactsize 0
+   style ServerBrowser
+   "Use default text" 0
+   "exact text" 1
+   "exact text size" 16
+   font "gui/fonts/sdf_MetronBook24"
+  }
+ }
+}

@@ -1,0 +1,11 @@
+name = "HOD Admin Tools";
+picture = "HOD_AdminTools/GUI/textures/hod_wolves.paa";
+logo = "HOD_AdminTools/GUI/textures/hod_logo.paa";
+logoSmall = "HOD_AdminTools/GUI/textures/hod_logo_small.paa";
+logoOver = "HOD_AdminTools/GUI/textures/hod_logo.paa";
+tooltip = "HOD Admin Tools";
+overview = "House of D admin tools for DayZ. Expansion-aware: vehicle keys, code locks, ATM, safezone-proof godmode.";
+action = "";
+author = "House of D";
+authorID = "0";
+version = "0.1.0-test";
