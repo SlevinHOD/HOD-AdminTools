@@ -31,8 +31,8 @@ class JMPlayerBan
     //  These read/write Bans.json directly so they work before the module loads.
     // -------------------------------------------------------------------------
 
-    static const string BAN_FILE = "$profile:CommunityOnlineTools\\Bans\\Bans.json";
-    static const string BAN_DIR  = "$profile:CommunityOnlineTools\\Bans\\";
+    static const string BAN_FILE = "$profile:HOD_AdminTools\\COT\\Bans\\Bans.json";
+    static const string BAN_DIR  = "$profile:HOD_AdminTools\\COT\\Bans\\";
 
     // "3d 2h 15m" / "Permanent" / "Expired"
     string GetExpiryString()

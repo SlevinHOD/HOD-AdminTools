@@ -44,7 +44,7 @@ class JMPlayerInstance : Managed
 	protected int m_PingAvg;
 	protected vector m_Position;
 	protected vector m_Orientation;
-	protected float m_Health;
+	protected float m_Health = -1; // HOD: -1 = not synced yet (was 0 = shown as dead)
 	protected float m_Blood;
 	protected float m_Shock;
 	protected int m_BloodStatType;
@@ -126,7 +126,7 @@ class JMPlayerInstance : Managed
 
 	float GetHealth()
 	{
-		return m_Health;
+		return Math.Max( m_Health, 0 ); // HOD: hide the -1 'not synced' marker
 	}
 
 	float GetHeatBuffer()
@@ -369,7 +369,7 @@ class JMPlayerInstance : Managed
 
 	bool IsDead()
 	{
-		return m_Health <= 0 || m_PlayerVars[JMPlayerVariables.DEAD];
+		return ( m_Health > -0.5 && m_Health <= 0 ) || m_PlayerVars[JMPlayerVariables.DEAD]; // HOD: unknown health isn't dead
 	}
 
 	// Returns true when the player has no customisation: only the "everyone" role and no

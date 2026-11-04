@@ -17,8 +17,13 @@ INSTALL
     Addons/ holds 5 PBOs, all named HOD_AdminTools*.pbo. When updating from 0.2.6 or
     older, DELETE any JM_COT_*.pbo files first (same addons under old names).
       -mod=@CF;@DayZ-Expansion-...;@HOD_AdminTools
- 3. Your existing COT config carries over: same profile folder (CommunityOnlineTools),
-    same permissions/roles files.
+ 3. Everything is written under <profiles>/HOD_AdminTools/ (since 0.2.10):
+      HOD_AdminTools/COT/            settings, logs, bans, webhooks, map editor, anticheat
+      HOD_AdminTools/Permissions/    roles, players, permissions (was PermissionsFramework)
+      HOD_AdminTools/ObjectBuilder/  building sets
+    On first start your old CommunityOnlineTools/ and PermissionsFramework/ folders are
+    COPIED in (originals kept, with a MOVED_TO_HOD_AdminTools.txt note). Delete the old
+    folders once you've checked roles/bans came across.
  4. Unsigned test build: set verifySignatures = 0, or sign it (see Keys/README.txt).
 
 NEW PERMISSIONS (add to your COT roles)

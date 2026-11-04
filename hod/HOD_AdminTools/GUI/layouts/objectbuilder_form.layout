@@ -20,19 +20,15 @@ PanelWidgetClass HOD_ObjectBuilderForm {
    Columns 1
    Rows 2
   }
-  TextListboxWidgetClass sets_list {
-   visible 1
+  PanelWidgetClass sets_list_wrap {
+   clipchildren 1
+   color 0 0 0 0
    position 5 64
    size 250 190
    hexactpos 1
    vexactpos 1
    hexactsize 1
    vexactsize 1
-   style Editor
-   lines 20
-   font "gui/fonts/sdf_MetronLight24"
-   "exact text" 1
-   "exact text size" 16
   }
   GridSpacerWidgetClass sets_wrapper {
    position 0 258
@@ -56,19 +52,15 @@ PanelWidgetClass HOD_ObjectBuilderForm {
    Columns 1
    Rows 1
   }
-  TextListboxWidgetClass objects_list {
-   visible 1
+  PanelWidgetClass objects_list_wrap {
+   clipchildren 1
+   color 0 0 0 0
    position 270 34
    size 270 300
    hexactpos 1
    vexactpos 1
    hexactsize 1
    vexactsize 1
-   style Editor
-   lines 20
-   font "gui/fonts/sdf_MetronLight24"
-   "exact text" 1
-   "exact text size" 16
   }
   GridSpacerWidgetClass objects_wrapper {
    position 265 338
@@ -92,19 +84,15 @@ PanelWidgetClass HOD_ObjectBuilderForm {
    Columns 1
    Rows 1
   }
-  TextListboxWidgetClass class_list {
-   visible 1
+  PanelWidgetClass class_list_wrap {
+   clipchildren 1
+   color 0 0 0 0
    position 555 34
    size 260 180
    hexactpos 1
    vexactpos 1
    hexactsize 1
    vexactsize 1
-   style Editor
-   lines 20
-   font "gui/fonts/sdf_MetronLight24"
-   "exact text" 1
-   "exact text size" 16
   }
   GridSpacerWidgetClass edit_wrapper {
    position 550 218

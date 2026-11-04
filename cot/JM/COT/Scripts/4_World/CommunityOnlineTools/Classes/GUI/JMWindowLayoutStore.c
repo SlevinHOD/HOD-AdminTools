@@ -12,7 +12,7 @@ class JMWindowLayoutEntry
 
 class JMWindowLayoutStore
 {
-	static const string FILE = "$profile:CommunityOnlineTools\\GUI\\window_layout.json";
+	static const string FILE = "$profile:HOD_AdminTools\\COT\\GUI\\window_layout.json";
 
 	ref array< ref JMWindowLayoutEntry > Entries = new array< ref JMWindowLayoutEntry >;
 

@@ -222,8 +222,8 @@ class JMConstants
 	static const string PERM_PLAYER_VOMIT                                   = "Admin.Player.Vomit";
 	static const string PERM_ROLES_UPDATE                                   = "Admin.Roles.Update";
 	static const string PERM_TRANSPORT_REPAIR                               = "Admin.Transport.Repair";
-	static const string DIR_COT = "$profile:CommunityOnlineTools\\";
-	static const string DIR_PF = "$profile:PermissionsFramework\\";
+	static const string DIR_COT = "$profile:HOD_AdminTools\\COT\\";
+	static const string DIR_PF = "$profile:HOD_AdminTools\\Permissions\\";
 	static const string DIR_PERMISSIONS = DIR_PF + "Permissions\\";
 	static const string DIR_ROLES 		= DIR_PF + "Roles\\";
 	static const string DIR_PLAYERS 	= DIR_PF + "Players\\";

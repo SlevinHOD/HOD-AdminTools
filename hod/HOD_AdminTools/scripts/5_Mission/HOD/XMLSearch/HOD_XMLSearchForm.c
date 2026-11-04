@@ -5,7 +5,7 @@ class HOD_XMLSearchForm : JMFormBase
 	protected HOD_XMLSearchModule m_Module;
 	protected UIActionEditableText m_Search;
 	protected UIActionText m_Count;
-	protected TextListboxWidget m_Results;
+	protected UIActionItemList m_Results; // COT list component (TextListbox clicks didn't register)
 	protected ref array<UIActionText> m_Details = new array<UIActionText>();
 	protected int m_Selected = -1;
 
@@ -23,9 +23,9 @@ class HOD_XMLSearchForm : JMFormBase
 		UIActionManager.CreateButton(row, "Re-read files", this, "Click_Reload");
 		m_Count = UIActionManager.CreateText(top, "Results:", "type at least 2 letters");
 
-		m_Results = TextListboxWidget.Cast(layoutRoot.FindAnyWidget("xml_results"));
-		if (m_Results)
-			m_Results.SetHandler(this);
+		m_Results = UIActionManager.CreateItemList(layoutRoot.FindAnyWidget("xml_results_wrap"), this, "OnClick_Results");
+		m_Results.SetEmptyText("Type a class name and press Search");
+		m_Results.SetViewportHeight(440);
 
 		Widget det = layoutRoot.FindAnyWidget("xml_details");
 		array<string> labels = {"Class", "On map now", "File", "Nominal / Min", "Lifetime", "Restock", "Quantity", "Cost", "Category", "Usage", "Value (tier)", "Tags", "Flags"};
@@ -62,10 +62,12 @@ class HOD_XMLSearchForm : JMFormBase
 		float listW = w * 0.5 - 10;
 		if (top)
 			top.SetSize(w, 30);
-		if (m_Results)
+		Widget wrap = layoutRoot.FindAnyWidget("xml_results_wrap");
+		if (wrap && m_Results)
 		{
-			m_Results.SetPos(5, 64);
-			m_Results.SetSize(listW, h - 70);
+			wrap.SetPos(5, 64);
+			wrap.SetSize(listW, h - 70);
+			m_Results.SetViewportHeight(h - 70);
 		}
 		if (det)
 		{
@@ -114,7 +116,7 @@ class HOD_XMLSearchForm : JMFormBase
 	void ShowResults()
 	{
 		HOD_TypeResults res = m_Module.m_ClientResults;
-		m_Results.ClearItems();
+		array<string> rows = new array<string>();
 		m_Selected = -1;
 		foreach (HOD_TypeBrief b : res.entries)
 		{
@@ -123,7 +125,7 @@ class HOD_XMLSearchForm : JMFormBase
 				line += "   n" + Num(b.nominal) + " / m" + Num(b.min);
 			else
 				line += "   (not in types)";
-			m_Results.AddItem(line, null, 0);
+			rows.Insert(line);
 		}
 
 		string info = string.Format("  [%1 types from %2 file(s)", res.indexed, res.files);
@@ -141,9 +143,10 @@ class HOD_XMLSearchForm : JMFormBase
 				shown = res.entries.Count().ToString() + " of " + res.total.ToString();
 			m_Count.SetText(shown + " match(es) for '" + res.query + "'" + info);
 		}
+		m_Results.SetItems(rows);
 		if (res.entries.Count() > 0)
 		{
-			m_Results.SelectRow(0);
+			m_Results.SetSelectedIndex(0, true);
 			SelectRow(0);
 		}
 		else
@@ -205,25 +208,13 @@ class HOD_XMLSearchForm : JMFormBase
 		m_Details[12].SetText(e.flags);
 	}
 
-	// polled every frame by COT's window - row selection works even if click events don't arrive
-	override void Update()
+	void OnClick_Results(UIEvent eid, UIActionBase action)
 	{
-		super.Update();
-		if (!m_Results)
+		if (eid != UIEvent.CLICK && eid != UIEvent.DOUBLE_CLICK)
 			return;
-		int row = m_Results.GetSelectedRow();
+		int row = m_Results.GetSelectedIndex();
 		if (row >= 0 && row != m_Selected)
 			SelectRow(row);
-	}
-
-	override bool OnItemSelected(Widget w, int x, int y, int row, int column, int oldRow, int oldColumn)
-	{
-		if (w == m_Results)
-		{
-			SelectRow(row);
-			return true;
-		}
-		return false;
 	}
 
 	protected HOD_TypeEntry CurrentDetail()

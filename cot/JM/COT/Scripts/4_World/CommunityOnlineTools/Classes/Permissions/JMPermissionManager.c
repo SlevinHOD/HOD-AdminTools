@@ -58,8 +58,8 @@ class JMPermissionManager
 		}
 		
 	#ifdef DIAG_DEVELOPER
-		if (FileExist("$profile:COT_RegisteredPermissions.txt"))
-			DeleteFile("$profile:COT_RegisteredPermissions.txt");
+		if (FileExist("$profile:HOD_AdminTools\\COT_RegisteredPermissions.txt"))
+			DeleteFile("$profile:HOD_AdminTools\\COT_RegisteredPermissions.txt");
 	#endif
 	}
 
@@ -678,7 +678,7 @@ class JMPermissionManager
 
 	#ifdef DIAG_DEVELOPER
 		//CF.FormatErrorEx("Registered permission %1 %2", ErrorExSeverity.INFO, permission, typename.EnumToString(JMPermissionType, permType));
-		FileHandle handle = OpenFile("$profile:COT_RegisteredPermissions.txt", FileMode.APPEND);
+		FileHandle handle = OpenFile("$profile:HOD_AdminTools\\COT_RegisteredPermissions.txt", FileMode.APPEND);
 		if (handle)
 		{
 			string stack;

@@ -5,8 +5,8 @@
 
 class JMBanModule : JMRenderableModuleBase
 {
-    static const string BAN_DIR  = "$profile:CommunityOnlineTools\\Bans\\";
-    static const string BAN_FILE = "$profile:CommunityOnlineTools\\Bans\\Bans.json";
+    static const string BAN_DIR  = "$profile:HOD_AdminTools\\COT\\Bans\\";
+    static const string BAN_FILE = "$profile:HOD_AdminTools\\COT\\Bans\\Bans.json";
     static const float PRUNE_INTERVAL = 60.0;
     protected ref JMPlayerBanStore             m_Store;
     protected ref map<string, ref JMPlayerBan> m_ActiveIndex;

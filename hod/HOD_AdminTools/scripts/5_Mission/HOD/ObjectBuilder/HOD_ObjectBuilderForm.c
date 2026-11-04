@@ -4,9 +4,10 @@ class HOD_ObjectBuilderForm : JMFormBase
 {
 	protected HOD_ObjectBuilderModule m_Module;
 
-	protected TextListboxWidget m_SetsList;
-	protected TextListboxWidget m_ObjectsList;
-	protected TextListboxWidget m_ClassList;
+	// COT's own list component (handles its own clicks; TextListbox clicks didn't register)
+	protected UIActionItemList m_SetsList;
+	protected UIActionItemList m_ObjectsList;
+	protected UIActionItemList m_ClassList;
 
 	protected UIActionEditableText m_NewSetName;
 	protected UIActionText m_ObjectsTitle;
@@ -21,8 +22,7 @@ class HOD_ObjectBuilderForm : JMFormBase
 	protected static ref array<string> s_AllClasses;
 	protected static ref array<string> s_AllLower;
 	protected bool m_Refreshing;
-	protected int m_LastSetRow = -2;
-	protected int m_LastObjRow = -2;
+
 
 	protected ref array<string> STEP_LABELS = {"Step 0.1 m / 1 deg", "Step 0.5 m / 5 deg", "Step 1 m / 15 deg", "Step 5 m / 45 deg"};
 	protected ref array<float> STEP_M = {0.1, 0.5, 1.0, 5.0};
@@ -35,16 +35,15 @@ class HOD_ObjectBuilderForm : JMFormBase
 
 	override void OnInit()
 	{
-		m_SetsList = TextListboxWidget.Cast(layoutRoot.FindAnyWidget("sets_list"));
-		m_ObjectsList = TextListboxWidget.Cast(layoutRoot.FindAnyWidget("objects_list"));
-		m_ClassList = TextListboxWidget.Cast(layoutRoot.FindAnyWidget("class_list"));
-		// route list events straight to this form (they don't always bubble up)
-		if (m_SetsList)
-			m_SetsList.SetHandler(this);
-		if (m_ObjectsList)
-			m_ObjectsList.SetHandler(this);
-		if (m_ClassList)
-			m_ClassList.SetHandler(this);
+		m_SetsList = UIActionManager.CreateItemList(layoutRoot.FindAnyWidget("sets_list_wrap"), this, "OnClick_SetsList");
+		m_ObjectsList = UIActionManager.CreateItemList(layoutRoot.FindAnyWidget("objects_list_wrap"), this, "OnClick_ObjectsList");
+		m_ClassList = UIActionManager.CreateItemList(layoutRoot.FindAnyWidget("class_list_wrap"), this, "OnClick_ClassList");
+		m_SetsList.SetEmptyText("No sets yet - type a name and press Create set");
+		m_ObjectsList.SetEmptyText("Click a set on the left to open it");
+		m_ClassList.SetEmptyText("Type 2+ letters to search classes");
+		m_SetsList.SetViewportHeight(190);
+		m_ObjectsList.SetViewportHeight(300);
+		m_ClassList.SetViewportHeight(180);
 
 		// --- sets column
 		Widget setsHeader = layoutRoot.FindAnyWidget("sets_header");
@@ -133,7 +132,7 @@ class HOD_ObjectBuilderForm : JMFormBase
 
 	protected void HOD_Layout(float w, float h)
 	{
-		if (w < 600 || h < 400)
+		if (w < 600 || h < 400 || !m_SetsList || !m_ObjectsList || !m_ClassList)
 			return;
 		float gap = 10;
 		float colL = (w - gap * 2) * 0.31;
@@ -144,17 +143,20 @@ class HOD_ObjectBuilderForm : JMFormBase
 
 		float setsListH = Math.Max(120, h - 64 - 130);
 		Place("sets_header", 0, 0, colL, 30);
-		Place("sets_list", 5, 64, colL - 10, setsListH);
+		Place("sets_list_wrap", 5, 64, colL - 10, setsListH);
+		m_SetsList.SetViewportHeight(setsListH);
 		Place("sets_wrapper", 0, 68 + setsListH, colL, 30);
 
 		float objListH = Math.Max(150, h - 34 - 175);
 		Place("objects_header", xM, 0, colM, 30);
-		Place("objects_list", xM + 5, 34, colM - 10, objListH);
+		Place("objects_list_wrap", xM + 5, 34, colM - 10, objListH);
+		m_ObjectsList.SetViewportHeight(objListH);
 		Place("objects_wrapper", xM, 38 + objListH, colM, 30);
 
 		float classH = Math.Max(120, h - 34 - 350);
 		Place("search_wrapper", xR, 0, colR, 30);
-		Place("class_list", xR + 5, 34, colR - 10, classH);
+		Place("class_list_wrap", xR + 5, 34, colR - 10, classH);
+		m_ClassList.SetViewportHeight(classH);
 		Place("edit_wrapper", xR, 38 + classH, colR, 30);
 	}
 
@@ -179,21 +181,22 @@ class HOD_ObjectBuilderForm : JMFormBase
 			return;
 		m_Refreshing = true;
 
-		m_SetsList.ClearItems();
+		array<string> setRows = new array<string>();
 		int selSet = -1;
 		foreach (HOD_OBSetInfo info : m_Module.m_ClientList.sets)
 		{
 			string state = "  [off]";
 			if (info.active)
 				state = "  [live]";
-			int row = m_SetsList.AddItem(info.name + "  (" + info.count + ")" + state, null, 0);
 			if (info.name == m_Module.CurrentSetName())
-				selSet = row;
+				selSet = setRows.Count();
+			setRows.Insert(info.name + "  (" + info.count + ")" + state);
 		}
+		m_SetsList.SetItems(setRows);
 		if (selSet >= 0)
-			m_SetsList.SelectRow(selSet);
+			m_SetsList.SetSelectedIndex(selSet, false);
 
-		m_ObjectsList.ClearItems();
+		array<string> objRows = new array<string>();
 		HOD_OBSet obSet = m_Module.m_ClientSet;
 		if (obSet)
 		{
@@ -204,13 +207,14 @@ class HOD_ObjectBuilderForm : JMFormBase
 			for (int i = 0; i < obSet.objects.Count(); i++)
 			{
 				HOD_OBObject o = obSet.objects[i];
-				m_ObjectsList.AddItem(string.Format("%1  %2", i + 1, o.type), null, 0);
+				objRows.Insert(string.Format("%1  %2", i + 1, o.type));
 			}
-			if (m_Module.m_SelectedIndex >= 0 && m_Module.m_SelectedIndex < m_ObjectsList.GetNumItems())
-			{
-				m_ObjectsList.SelectRow(m_Module.m_SelectedIndex);
-				m_ObjectsList.EnsureVisible(m_Module.m_SelectedIndex);
-			}
+		}
+		m_ObjectsList.SetItems(objRows);
+		if (obSet)
+		{
+			if (m_Module.m_SelectedIndex >= 0 && m_Module.m_SelectedIndex < objRows.Count())
+				m_ObjectsList.SetSelectedIndex(m_Module.m_SelectedIndex, true);
 		}
 		else
 		{
@@ -228,71 +232,34 @@ class HOD_ObjectBuilderForm : JMFormBase
 		{
 			m_SelectedText.SetText("none");
 		}
-		m_LastSetRow = m_SetsList.GetSelectedRow();
-		m_LastObjRow = m_ObjectsList.GetSelectedRow();
 		m_Refreshing = false;
 	}
 
-	// Polled every frame by COT's window: selecting a set opens it, selecting an object selects it.
-	// Doesn't depend on click events reaching the form.
-	override void Update()
-	{
-		super.Update();
-		if (!m_SetsList || m_Refreshing)
-			return;
-
-		int setRow = m_SetsList.GetSelectedRow();
-		if (setRow != m_LastSetRow)
-		{
-			m_LastSetRow = setRow;
-			string name = SelectedSetName();
-			if (name != "" && name != m_Module.CurrentSetName())
-				m_Module.Client_OpenSet(name);
-		}
-
-		int objRow = m_ObjectsList.GetSelectedRow();
-		if (objRow != m_LastObjRow)
-		{
-			m_LastObjRow = objRow;
-			if (objRow >= 0 && objRow != m_Module.m_SelectedIndex)
-			{
-				m_Module.m_SelectedIndex = objRow;
-				RefreshAll();
-			}
-		}
-	}
-
-	override bool OnItemSelected(Widget w, int x, int y, int row, int column, int oldRow, int oldColumn)
+	void OnClick_SetsList(UIEvent eid, UIActionBase action)
 	{
 		if (m_Refreshing)
-			return false;
-		if (w == m_ObjectsList)
-		{
-			m_Module.m_SelectedIndex = row;
-			RefreshAll();
-			return true;
-		}
-		return false;
+			return;
+		if (eid == UIEvent.CLICK || eid == UIEvent.DOUBLE_CLICK)
+			OpenSelectedSet();
 	}
 
-	override bool OnDoubleClick(Widget w, int x, int y, int button)
+	void OnClick_ObjectsList(UIEvent eid, UIActionBase action)
 	{
-		if (w == m_SetsList)
-		{
-			OpenSelectedSet();
-			return true;
-		}
-		if (w == m_ClassList)
-		{
+		if (m_Refreshing || eid != UIEvent.CLICK)
+			return;
+		m_Module.m_SelectedIndex = m_ObjectsList.GetSelectedIndex();
+		RefreshAll();
+	}
+
+	void OnClick_ClassList(UIEvent eid, UIActionBase action)
+	{
+		if (eid == UIEvent.DOUBLE_CLICK)
 			PlaceSelectedClass();
-			return true;
-		}
-		return false;
 	}
 
 	protected string SelectedSetName()
 	{
-		int row = m_SetsList.GetSelectedRow();
+		int row = m_SetsList.GetSelectedIndex();
 		if (row < 0 || row >= m_Module.m_ClientList.sets.Count())
 			return "";
 		return m_Module.m_ClientList.sets[row].name;
@@ -300,7 +267,7 @@ class HOD_ObjectBuilderForm : JMFormBase
 
 	protected bool SelectedSetActive()
 	{
-		int row = m_SetsList.GetSelectedRow();
+		int row = m_SetsList.GetSelectedIndex();
 		if (row < 0 || row >= m_Module.m_ClientList.sets.Count())
 			return false;
 		return m_Module.m_ClientList.sets[row].active;
@@ -352,25 +319,27 @@ class HOD_ObjectBuilderForm : JMFormBase
 		string q = m_Search.GetText();
 		q.ToLower();
 		q.TrimInPlace();
-		m_ClassList.ClearItems();
 		m_ClassRows.Clear();
 		if (q.Length() < 2 || !s_AllClasses)
+		{
+			m_ClassList.SetItems(m_ClassRows);
 			return;
+		}
 		for (int i = 0; i < s_AllClasses.Count(); i++)
 		{
 			if (s_AllLower[i].IndexOf(q) < 0)
 				continue;
-			m_ClassList.AddItem(s_AllClasses[i], null, 0);
 			m_ClassRows.Insert(s_AllClasses[i]);
 			if (m_ClassRows.Count() >= 300)
 				break;
 		}
+		m_ClassList.SetItems(m_ClassRows);
 	}
 
 	// selected search result, or the typed text if it's an exact class name
 	protected string ChosenClass()
 	{
-		int row = m_ClassList.GetSelectedRow();
+		int row = m_ClassList.GetSelectedIndex();
 		if (row >= 0 && row < m_ClassRows.Count())
 			return m_ClassRows[row];
 		string typed = m_Search.GetText();

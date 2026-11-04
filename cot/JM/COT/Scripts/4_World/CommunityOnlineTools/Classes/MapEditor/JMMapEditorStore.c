@@ -4,7 +4,7 @@
 class JMMapEditorStore
 {
 	ref array< ref JMMapEditorObject > Objects = new array< ref JMMapEditorObject >;
-	static const string FILE = "$profile:CommunityOnlineTools\\MapEditor\\map.json";
+	static const string FILE = "$profile:HOD_AdminTools\\COT\\MapEditor\\map.json";
 
 	static JMMapEditorStore Load()
 	{

@@ -20,19 +20,15 @@ PanelWidgetClass HOD_XMLSearchForm {
    Columns 1
    Rows 2
   }
-  TextListboxWidgetClass xml_results {
-   visible 1
+  PanelWidgetClass xml_results_wrap {
+   clipchildren 1
+   color 0 0 0 0
    position 5 64
    size 380 440
    hexactpos 1
    vexactpos 1
    hexactsize 1
    vexactsize 1
-   style Editor
-   lines 20
-   font "gui/fonts/sdf_MetronLight24"
-   "exact text" 1
-   "exact text size" 16
   }
   GridSpacerWidgetClass xml_details {
    position 390 64

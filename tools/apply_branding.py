@@ -157,6 +157,54 @@ def layout_edits():
             wr(sb, s)
 
 
+# Source fixes that must survive COT re-imports (applied idempotently)
+FIXES = [
+    # player list showed everyone as dead until the first health sync (m_Health defaulted to 0)
+    ("Scripts/4_World/CommunityOnlineTools/Classes/Permissions/JMPlayerInstance.c",
+     "\tprotected float m_Health;\n",
+     "\tprotected float m_Health = -1; // HOD: -1 = not synced yet (was 0 = shown as dead)\n"),
+    ("Scripts/4_World/CommunityOnlineTools/Classes/Permissions/JMPlayerInstance.c",
+     "\t\treturn m_Health <= 0 || m_PlayerVars[JMPlayerVariables.DEAD];",
+     "\t\treturn ( m_Health > -0.5 && m_Health <= 0 ) || m_PlayerVars[JMPlayerVariables.DEAD]; // HOD: unknown health isn't dead"),
+    ("Scripts/4_World/CommunityOnlineTools/Classes/Permissions/JMPlayerInstance.c",
+     "\tfloat GetHealth()\n\t{\n\t\treturn m_Health;\n\t}",
+     "\tfloat GetHealth()\n\t{\n\t\treturn Math.Max( m_Health, 0 ); // HOD: hide the -1 'not synced' marker\n\t}"),
+]
+
+
+# every profile file goes under $profile:HOD_AdminTools (HOD_Profile.c migrates the old folders once)
+PATHS = [
+    ('"$profile:CommunityOnlineTools\\\\', '"$profile:HOD_AdminTools\\\\COT\\\\'),
+    ('"$profile:PermissionsFramework\\\\', '"$profile:HOD_AdminTools\\\\Permissions\\\\'),
+    ('"$profile:COT_RegisteredPermissions.txt"', '"$profile:HOD_AdminTools\\\\COT_RegisteredPermissions.txt"'),
+    ('"$profile:COT_Recolor_Snapshot.json"', '"$profile:HOD_AdminTools\\\\COT_Recolor_Snapshot.json"'),
+]
+
+
+def apply_paths():
+    n = 0
+    for p in glob.glob(os.path.join(ROOT, "Scripts/**/*.c"), recursive=True):
+        s = rd(p); t = s
+        for a, b in PATHS:
+            t = t.replace(a, b)
+        if t != s:
+            wr(p, t); n += 1
+    print("profile path rewrites:", n, "files")
+
+
+def apply_fixes():
+    for rel, a, b in FIXES:
+        p = os.path.join(ROOT, rel)
+        if not os.path.exists(p):
+            print("MISSING FILE", rel); continue
+        s = rd(p)
+        if b in s:
+            continue
+        if a not in s:
+            print("FIX NOT APPLICABLE (upstream changed?)", rel, a.strip()[:60]); continue
+        wr(p, s.replace(a, b, 1))
+
+
 def main():
     changed = 0
     for p in glob.glob(os.path.join(ROOT, "Scripts/**/*.c"), recursive=True):
@@ -192,6 +240,8 @@ def main():
         wr(p, s.replace(a, b))
 
     layout_edits()
+    apply_fixes()
+    apply_paths()
 
     st = os.path.join(ROOT, "languagecore/stringtable.csv")
     s = rd(st)
