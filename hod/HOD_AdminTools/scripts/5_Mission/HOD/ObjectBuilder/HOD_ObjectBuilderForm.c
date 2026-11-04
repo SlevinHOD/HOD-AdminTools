@@ -68,7 +68,7 @@ class HOD_ObjectBuilderForm : JMFormBase
 		Widget objRow2 = UIActionManager.CreateGridSpacer(objs, 1, 2);
 		UIActionManager.CreateButton(objRow2, "Copy init.c", this, "Click_ExportInit");
 		UIActionManager.CreateButton(objRow2, "Copy XML", this, "Click_ExportXml");
-		m_BuildMode = UIActionManager.CreateCheckbox(objs, "Build mode hotkeys (click / wheel / Del)", this, "Click_BuildMode", m_Module.m_BuildMode);
+		m_BuildMode = UIActionManager.CreateCheckbox(objs, "Build mode hotkeys (click / wheel / Backspace)", this, "Click_BuildMode", m_Module.m_BuildMode);
 
 		// --- add / edit column
 		Widget search = layoutRoot.FindAnyWidget("search_wrapper");

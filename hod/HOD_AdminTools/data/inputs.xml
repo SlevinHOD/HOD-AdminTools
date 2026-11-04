@@ -35,7 +35,7 @@
 			<btn name="mWheelDown"/>
 		</input>
 		<input name="UAHODOBDelete">
-			<btn name="kDelete"/>
+			<btn name="kBack"/>
 		</input>
 	</preset>
 </modded_inputs>

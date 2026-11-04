@@ -31,7 +31,7 @@ OBJECT BUILDER
   "live" sets are spawned on every server start. Use Copy init.c / Copy XML to bake a
   finished set into your mission instead.
   Build-mode hotkeys (tick the checkbox): left click select, Left Ctrl deselect,
-  mouse wheel rotate, Delete removes the selected object. Rebind under
+  mouse wheel rotate, Backspace removes the selected object (Delete is COT's own delete-at-crosshair). Rebind under
   Options > Controls > HOD Admin Tools. Holster your weapon in build mode.
 
 XML SEARCH
