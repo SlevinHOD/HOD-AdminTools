@@ -1,0 +1,71 @@
+{
+	"Departments": [
+		{
+			"DepartmentName": "Community Online Tools",
+			"Sections": [
+				{
+					"SectionName": "Active Developers",
+					"SectionLines": [
+						"LieutenantMaster",
+						"LAVA (liquidrock)"
+					]
+				},
+				{
+					"SectionName": "Inactive Developers",
+					"SectionLines": [
+						"Jacob_Mango",
+						"Arkensor",
+						"DannyDog68",
+						"Thurston",
+						"GrosTon1"
+					]
+				},
+				{
+					"SectionName": "Original Developers",
+					"SectionLines": [
+						"Jacob_Mango",
+						"Arkensor",
+						"DannyDog68"
+					]
+				},
+				{
+					"SectionName": "Thank you to the following communities",
+					"SectionLines": [
+						"PIPSI.NET AU/NZ",
+						"1SKGaming",
+						"AWG",
+						"r/DayZUnderground",
+						"Trumps Wall",
+						"Expansion Mod Team",
+						"Bohemia Interactive"
+					]
+				},
+				{
+					"SectionName": "Thank you for being guinea pigs",
+					"SectionLines": [
+						"Thurston",
+						"Not A Banana",
+						"Zombie",
+						"odizzzle",
+						"wydox",
+						"DM4",
+						"Dingo57",
+						"Grim",
+						"AussieCleetus",
+						"GrosTon1",
+						"DirtySanchez",
+						"Diesel",
+						"ayano",
+						"wrdg",
+						"InclementDab",
+						"lystic",
+						"grim",
+						"DaOne",
+						"salutesh",
+						"MarioE"
+					]
+				}
+			]
+		}
+	]
+}
