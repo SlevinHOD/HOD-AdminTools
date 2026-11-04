@@ -1,0 +1,363 @@
+PanelWidgetClass HOD_StatsBar {
+ visible 0
+ color 0.071 0.086 0.071 0.86
+ position 0 14
+ size 921 32
+ hexactpos 1
+ vexactpos 1
+ hexactsize 1
+ vexactsize 1
+ priority 50
+ {
+  PanelWidgetClass hud_top_rule {
+   ignorepointer 1
+   color 0.831 0.686 0.216 0.9
+   position 0 0
+   size 1 2
+   hexactpos 1
+   vexactpos 1
+   hexactsize 0
+   vexactsize 1
+  }
+  ButtonWidgetClass hud_grip {
+   color 0 0 0 0
+   position 8 5
+   size 22 22
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   style Empty
+   {
+    ImageWidgetClass hud_grip_img {
+     ignorepointer 1
+     color 0.831 0.686 0.216 0.9
+     position 3 3
+     size 16 16
+     hexactpos 1
+     vexactpos 1
+     hexactsize 1
+     vexactsize 1
+     mode blend
+     "src alpha" 1
+     stretch 1
+    }
+   }
+  }
+  PanelWidgetClass hud_sep1 {
+   ignorepointer 1
+   color 0.831 0.686 0.216 0.35
+   position 36 8
+   size 1 16
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+  }
+  ImageWidgetClass ic_players {
+   ignorepointer 1
+   color 0.55 0.6 0.55 0.6
+   position 43 7
+   size 18 18
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   mode blend
+   "src alpha" 1
+   stretch 1
+  }
+  TextWidgetClass tx_players {
+   ignorepointer 1
+   clipchildren 1
+   color 0.933 0.965 0.925 1
+   position 67 0
+   size 30 32
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   text "-"
+   font "gui/fonts/sdf_MetronLight36"
+   "exact text" 1
+   "exact text size" 15
+   "text halign" left
+   "text valign" center
+  }
+  PanelWidgetClass hud_sep2 {
+   ignorepointer 1
+   color 0.831 0.686 0.216 0.35
+   position 103 8
+   size 1 16
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+  }
+  ImageWidgetClass ic_god {
+   ignorepointer 1
+   color 0.55 0.6 0.55 0.6
+   position 110 7
+   size 18 18
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   mode blend
+   "src alpha" 1
+   stretch 1
+  }
+  ImageWidgetClass ic_invis {
+   ignorepointer 1
+   color 0.55 0.6 0.55 0.6
+   position 134 7
+   size 18 18
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   mode blend
+   "src alpha" 1
+   stretch 1
+  }
+  ImageWidgetClass ic_esp {
+   ignorepointer 1
+   color 0.55 0.6 0.55 0.6
+   position 158 7
+   size 18 18
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   mode blend
+   "src alpha" 1
+   stretch 1
+  }
+  ImageWidgetClass ic_cam {
+   ignorepointer 1
+   color 0.55 0.6 0.55 0.6
+   position 182 7
+   size 18 18
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   mode blend
+   "src alpha" 1
+   stretch 1
+  }
+  ImageWidgetClass ic_ammo {
+   ignorepointer 1
+   color 0.55 0.6 0.55 0.6
+   position 206 7
+   size 18 18
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   mode blend
+   "src alpha" 1
+   stretch 1
+  }
+  PanelWidgetClass hud_sep3 {
+   ignorepointer 1
+   color 0.831 0.686 0.216 0.35
+   position 230 8
+   size 1 16
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+  }
+  ImageWidgetClass ic_pos {
+   ignorepointer 1
+   color 0.55 0.6 0.55 0.6
+   position 237 7
+   size 18 18
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   mode blend
+   "src alpha" 1
+   stretch 1
+  }
+  TextWidgetClass tx_pos {
+   ignorepointer 1
+   clipchildren 1
+   color 0.933 0.965 0.925 1
+   position 261 0
+   size 196 32
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   text "-"
+   font "gui/fonts/sdf_MetronLight36"
+   "exact text" 1
+   "exact text size" 15
+   "text halign" left
+   "text valign" center
+  }
+  ButtonWidgetClass bt_copypos {
+   color 0 0 0 0
+   position 463 5
+   size 22 22
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   style Empty
+   {
+    ImageWidgetClass bt_copypos_img {
+     ignorepointer 1
+     color 0.831 0.686 0.216 0.9
+     position 3 3
+     size 16 16
+     hexactpos 1
+     vexactpos 1
+     hexactsize 1
+     vexactsize 1
+     mode blend
+     "src alpha" 1
+     stretch 1
+    }
+   }
+  }
+  PanelWidgetClass hud_sep4 {
+   ignorepointer 1
+   color 0.831 0.686 0.216 0.35
+   position 491 8
+   size 1 16
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+  }
+  ImageWidgetClass ic_target {
+   ignorepointer 1
+   color 0.55 0.6 0.55 0.6
+   position 498 7
+   size 18 18
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   mode blend
+   "src alpha" 1
+   stretch 1
+  }
+  TextWidgetClass tx_target {
+   ignorepointer 1
+   clipchildren 1
+   color 0.933 0.965 0.925 1
+   position 522 0
+   size 220 32
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   text "-"
+   font "gui/fonts/sdf_MetronLight36"
+   "exact text" 1
+   "exact text size" 15
+   "text halign" left
+   "text valign" center
+  }
+  ButtonWidgetClass bt_copytarget {
+   color 0 0 0 0
+   position 748 5
+   size 22 22
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   style Empty
+   {
+    ImageWidgetClass bt_copytarget_img {
+     ignorepointer 1
+     color 0.831 0.686 0.216 0.9
+     position 3 3
+     size 16 16
+     hexactpos 1
+     vexactpos 1
+     hexactsize 1
+     vexactsize 1
+     mode blend
+     "src alpha" 1
+     stretch 1
+    }
+   }
+  }
+  PanelWidgetClass hud_sep5 {
+   ignorepointer 1
+   color 0.831 0.686 0.216 0.35
+   position 776 8
+   size 1 16
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+  }
+  ImageWidgetClass ic_fps {
+   ignorepointer 1
+   color 0.55 0.6 0.55 0.6
+   position 783 7
+   size 18 18
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   mode blend
+   "src alpha" 1
+   stretch 1
+  }
+  TextWidgetClass tx_fps {
+   ignorepointer 1
+   clipchildren 1
+   color 0.933 0.965 0.925 1
+   position 807 0
+   size 34 32
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   text "-"
+   font "gui/fonts/sdf_MetronLight36"
+   "exact text" 1
+   "exact text size" 15
+   "text halign" left
+   "text valign" center
+  }
+  ImageWidgetClass ic_time {
+   ignorepointer 1
+   color 0.55 0.6 0.55 0.6
+   position 847 7
+   size 18 18
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   mode blend
+   "src alpha" 1
+   stretch 1
+  }
+  TextWidgetClass tx_time {
+   ignorepointer 1
+   clipchildren 1
+   color 0.933 0.965 0.925 1
+   position 871 0
+   size 42 32
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   text "-"
+   font "gui/fonts/sdf_MetronLight36"
+   "exact text" 1
+   "exact text size" 15
+   "text halign" left
+   "text valign" center
+  }
+ }
+}

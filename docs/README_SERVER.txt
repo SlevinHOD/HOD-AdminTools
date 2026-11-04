@@ -42,3 +42,10 @@ OBJECT BUILDER
 XML SEARCH
   Reads $mission:db/types.xml plus every type="types" file listed in
   cfgeconomycore.xml. Read-only. "Re-read files" after you edit them.
+
+STATS BAR (0.2.11)
+  A slim bar at the bottom of the screen while the admin tools are ON (COT toggle).
+  players online | godmode, invisible, ESP, free cam, unlimited ammo (gold = on)
+  | your position [copy] | what your crosshair is on + distance [copy] | FPS | game time
+  Open the tools menu to get a cursor, then drag the grip on the left to move it;
+  right-click the grip to reset. Saved per client in <profile>/HOD_AdminTools/StatsBar.json.
