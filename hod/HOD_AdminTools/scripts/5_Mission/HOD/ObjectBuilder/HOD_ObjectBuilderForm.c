@@ -137,16 +137,16 @@ class HOD_ObjectBuilderForm : JMFormBase
 			m_SetsList.SelectRow(selSet);
 
 		m_ObjectsList.ClearItems();
-		HOD_OBSet set = m_Module.m_ClientSet;
-		if (set)
+		HOD_OBSet obSet = m_Module.m_ClientSet;
+		if (obSet)
 		{
 			string live = "despawned";
-			if (set.Active)
+			if (obSet.Active)
 				live = "live";
-			m_ObjectsTitle.SetText(set.Name + " - " + set.Objects.Count() + " objects, " + live);
-			for (int i = 0; i < set.Objects.Count(); i++)
+			m_ObjectsTitle.SetText(obSet.Name + " - " + obSet.Objects.Count() + " objects, " + live);
+			for (int i = 0; i < obSet.Objects.Count(); i++)
 			{
-				HOD_OBObject o = set.Objects[i];
+				HOD_OBObject o = obSet.Objects[i];
 				m_ObjectsList.AddItem(string.Format("%1  %2", i + 1, o.Type), null, 0);
 			}
 			if (m_Module.m_SelectedIndex >= 0 && m_Module.m_SelectedIndex < m_ObjectsList.GetNumItems())

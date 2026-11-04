@@ -124,13 +124,13 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		{
 			if (fileName != "")
 			{
-				HOD_OBSet set = new HOD_OBSet();
-				JsonFileLoader<HOD_OBSet>.JsonLoadFile(HOD_OB_DIR + "/" + fileName, set);
-				if (set.Name == "")
-					set.Name = fileName.Substring(0, fileName.Length() - 5);
-				m_Sets.Set(set.Name, set);
-				if (set.Active)
-					Server_SpawnSet(set);
+				HOD_OBSet obSet = new HOD_OBSet();
+				JsonFileLoader<HOD_OBSet>.JsonLoadFile(HOD_OB_DIR + "/" + fileName, obSet);
+				if (obSet.Name == "")
+					obSet.Name = fileName.Substring(0, fileName.Length() - 5);
+				m_Sets.Set(obSet.Name, obSet);
+				if (obSet.Active)
+					Server_SpawnSet(obSet);
 			}
 			more = FindNextFile(h, fileName, attr);
 		}
@@ -138,9 +138,9 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		Print("[HOD] Object Builder loaded " + m_Sets.Count() + " set(s)");
 	}
 
-	protected void Server_Save(HOD_OBSet set)
+	protected void Server_Save(HOD_OBSet obSet)
 	{
-		JsonFileLoader<HOD_OBSet>.JsonSaveFile(SetFile(set.Name), set);
+		JsonFileLoader<HOD_OBSet>.JsonSaveFile(SetFile(obSet.Name), obSet);
 	}
 
 	protected Object Server_SpawnObject(HOD_OBObject o)
@@ -155,13 +155,13 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		return obj;
 	}
 
-	protected void Server_SpawnSet(HOD_OBSet set)
+	protected void Server_SpawnSet(HOD_OBSet obSet)
 	{
-		Server_DespawnSet(set.Name);
+		Server_DespawnSet(obSet.Name);
 		array<Object> live = new array<Object>();
-		foreach (HOD_OBObject o : set.Objects)
+		foreach (HOD_OBObject o : obSet.Objects)
 			live.Insert(Server_SpawnObject(o));
-		m_Live.Set(set.Name, live);
+		m_Live.Set(obSet.Name, live);
 	}
 
 	protected void Server_DespawnSet(string name)
@@ -178,18 +178,18 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 	}
 
 	// keep the live object for one index in sync with its data
-	protected void Server_RespawnIndex(HOD_OBSet set, int idx)
+	protected void Server_RespawnIndex(HOD_OBSet obSet, int idx)
 	{
-		if (!set.Active)
+		if (!obSet.Active)
 			return;
 		array<Object> live;
-		if (!m_Live.Find(set.Name, live))
+		if (!m_Live.Find(obSet.Name, live))
 			return;
-		while (live.Count() < set.Objects.Count())
+		while (live.Count() < obSet.Objects.Count())
 			live.Insert(null);
 		if (live[idx])
 			GetGame().ObjectDelete(live[idx]);
-		live[idx] = Server_SpawnObject(set.Objects[idx]);
+		live[idx] = Server_SpawnObject(obSet.Objects[idx]);
 	}
 
 	protected bool Server_Allowed(PlayerIdentity sender, string perm)
@@ -201,12 +201,12 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 	protected void Server_SendList(PlayerIdentity to)
 	{
 		HOD_OBSetList list = new HOD_OBSetList();
-		foreach (string name, HOD_OBSet set : m_Sets)
+		foreach (string name, HOD_OBSet obSet : m_Sets)
 		{
 			HOD_OBSetInfo info = new HOD_OBSetInfo();
 			info.Name = name;
-			info.Active = set.Active;
-			info.Count = set.Objects.Count();
+			info.Active = obSet.Active;
+			info.Count = obSet.Objects.Count();
 			list.Sets.Insert(info);
 		}
 		JsonSerializer js = new JsonSerializer();
@@ -217,10 +217,10 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 
 	protected void Server_SendSet(PlayerIdentity to, string name)
 	{
-		HOD_OBSet set;
-		if (!m_Sets.Find(name, set))
+		HOD_OBSet obSet;
+		if (!m_Sets.Find(name, obSet))
 			return;
-		GetRPCManager().SendRPC(RPC_NS, "SetData", new Param1<string>(set.ToJson()), true, to);
+		GetRPCManager().SendRPC(RPC_NS, "SetData", new Param1<string>(obSet.ToJson()), true, to);
 	}
 
 	protected void Server_Log(PlayerIdentity sender, string text)
@@ -255,11 +255,11 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 			COTCreateNotification(sender, new StringLocaliser("Object Builder: invalid or duplicate set name"));
 			return;
 		}
-		HOD_OBSet set = new HOD_OBSet();
-		set.Name = name;
-		m_Sets.Set(name, set);
+		HOD_OBSet obSet = new HOD_OBSet();
+		obSet.Name = name;
+		m_Sets.Set(name, obSet);
 		m_Live.Set(name, new array<Object>());
-		Server_Save(set);
+		Server_Save(obSet);
 		Server_Log(sender, "created set " + name);
 		Server_SendList(sender);
 		Server_SendSet(sender, name);
@@ -284,18 +284,18 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		Param2<string, bool> p;
 		if (type != CallType.Server || !ctx.Read(p) || !Server_Allowed(sender, PERM_EDIT))
 			return;
-		HOD_OBSet set;
-		if (!m_Sets.Find(p.param1, set))
+		HOD_OBSet obSet;
+		if (!m_Sets.Find(p.param1, obSet))
 			return;
-		set.Active = p.param2;
-		if (set.Active)
-			Server_SpawnSet(set);
+		obSet.Active = p.param2;
+		if (obSet.Active)
+			Server_SpawnSet(obSet);
 		else
-			Server_DespawnSet(set.Name);
-		Server_Save(set);
-		Server_Log(sender, string.Format("set %1 active=%2", set.Name, set.Active));
+			Server_DespawnSet(obSet.Name);
+		Server_Save(obSet);
+		Server_Log(sender, string.Format("set %1 active=%2", obSet.Name, obSet.Active));
 		Server_SendList(sender);
-		Server_SendSet(sender, set.Name);
+		Server_SendSet(sender, obSet.Name);
 	}
 
 	void AddObject(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
@@ -303,8 +303,8 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		Param4<string, string, vector, vector> p;
 		if (type != CallType.Server || !ctx.Read(p) || !Server_Allowed(sender, PERM_EDIT))
 			return;
-		HOD_OBSet set;
-		if (!m_Sets.Find(p.param1, set))
+		HOD_OBSet obSet;
+		if (!m_Sets.Find(p.param1, obSet))
 			return;
 		string cls = p.param2;
 		if (!GetGame().ConfigIsExisting("CfgVehicles " + cls) && !GetGame().ConfigIsExisting("CfgNonAIVehicles " + cls))
@@ -312,11 +312,11 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 			COTCreateNotification(sender, new StringLocaliser("Object Builder: unknown class " + cls));
 			return;
 		}
-		set.Objects.Insert(new HOD_OBObject(cls, p.param3, p.param4));
-		Server_RespawnIndex(set, set.Objects.Count() - 1);
-		Server_Save(set);
-		Server_Log(sender, string.Format("%1: added %2 at %3", set.Name, cls, p.param3));
-		Server_SendSet(sender, set.Name);
+		obSet.Objects.Insert(new HOD_OBObject(cls, p.param3, p.param4));
+		Server_RespawnIndex(obSet, obSet.Objects.Count() - 1);
+		Server_Save(obSet);
+		Server_Log(sender, string.Format("%1: added %2 at %3", obSet.Name, cls, p.param3));
+		Server_SendSet(sender, obSet.Name);
 	}
 
 	void UpdateObject(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
@@ -324,17 +324,17 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		Param4<string, int, vector, vector> p;
 		if (type != CallType.Server || !ctx.Read(p) || !Server_Allowed(sender, PERM_EDIT))
 			return;
-		HOD_OBSet set;
-		if (!m_Sets.Find(p.param1, set))
+		HOD_OBSet obSet;
+		if (!m_Sets.Find(p.param1, obSet))
 			return;
 		int idx = p.param2;
-		if (idx < 0 || idx >= set.Objects.Count())
+		if (idx < 0 || idx >= obSet.Objects.Count())
 			return;
-		set.Objects[idx].Position = p.param3;
-		set.Objects[idx].Orientation = p.param4;
-		Server_RespawnIndex(set, idx);
-		Server_Save(set);
-		Server_SendSet(sender, set.Name);
+		obSet.Objects[idx].Position = p.param3;
+		obSet.Objects[idx].Orientation = p.param4;
+		Server_RespawnIndex(obSet, idx);
+		Server_Save(obSet);
+		Server_SendSet(sender, obSet.Name);
 	}
 
 	void RemoveObject(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
@@ -342,23 +342,23 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		Param2<string, int> p;
 		if (type != CallType.Server || !ctx.Read(p) || !Server_Allowed(sender, PERM_EDIT))
 			return;
-		HOD_OBSet set;
-		if (!m_Sets.Find(p.param1, set))
+		HOD_OBSet obSet;
+		if (!m_Sets.Find(p.param1, obSet))
 			return;
 		int idx = p.param2;
-		if (idx < 0 || idx >= set.Objects.Count())
+		if (idx < 0 || idx >= obSet.Objects.Count())
 			return;
 		array<Object> live;
-		if (m_Live.Find(set.Name, live) && idx < live.Count())
+		if (m_Live.Find(obSet.Name, live) && idx < live.Count())
 		{
 			if (live[idx])
 				GetGame().ObjectDelete(live[idx]);
 			live.Remove(idx);
 		}
-		Server_Log(sender, string.Format("%1: removed %2", set.Name, set.Objects[idx].Type));
-		set.Objects.Remove(idx);
-		Server_Save(set);
-		Server_SendSet(sender, set.Name);
+		Server_Log(sender, string.Format("%1: removed %2", obSet.Name, obSet.Objects[idx].Type));
+		obSet.Objects.Remove(idx);
+		Server_Save(obSet);
+		Server_SendSet(sender, obSet.Name);
 	}
 
 	// =============================================================== client
@@ -381,14 +381,14 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		Param1<string> p;
 		if (type != CallType.Client || !ctx.Read(p))
 			return;
-		HOD_OBSet set = HOD_OBSet.FromJson(p.param1);
-		if (!set)
+		HOD_OBSet obSet = HOD_OBSet.FromJson(p.param1);
+		if (!obSet)
 			return;
-		if (!m_ClientSet || m_ClientSet.Name != set.Name)
+		if (!m_ClientSet || m_ClientSet.Name != obSet.Name)
 			m_SelectedIndex = -1;
-		m_ClientSet = set;
-		if (m_SelectedIndex >= set.Objects.Count())
-			m_SelectedIndex = set.Objects.Count() - 1;
+		m_ClientSet = obSet;
+		if (m_SelectedIndex >= obSet.Objects.Count())
+			m_SelectedIndex = obSet.Objects.Count() - 1;
 		RefreshForm();
 	}
 

@@ -10,7 +10,7 @@ import re
 import sys
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "src/HOD_AdminTools/scripts"
-RESERVED = {"out", "inout", "ref", "class", "auto", "local", "string", "typename", "func", "null", "this", "super", "new", "delete", "notnull", "autoptr", "proto", "native", "static", "const", "private", "protected", "override", "event", "sealed", "modded"}
+RESERVED = {"set", "map", "array", "vector", "Class", "Managed", "Param", "out", "inout", "ref", "class", "auto", "local", "string", "typename", "func", "null", "this", "super", "new", "delete", "notnull", "autoptr", "proto", "native", "static", "const", "private", "protected", "override", "event", "sealed", "modded"}
 MODULES = ["3_Game", "4_World", "5_Mission"]
 
 
@@ -77,7 +77,7 @@ def main():
                     stack.pop()
             if re.search(r"\?\s*[^:;]+\s*:", line) and "?" in line:
                 errors.append(f"{path}:{ln}: looks like a ternary (not supported)")
-            m = re.search(r"\b(?:int|float|bool|string|vector|array<[^>]+>)\s+(\w+)\s*[=;,)]", line)
+            m = re.search(r"\b(?:int|float|bool|string|vector|array<[^>]+>|[A-Z]\w*)\s+(\w+)\s*[=;,)]", line)
             if m and m.group(1) in RESERVED:
                 errors.append(f"{path}:{ln}: reserved word used as identifier: {m.group(1)}")
         if stack:
