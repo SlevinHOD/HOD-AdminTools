@@ -21,6 +21,8 @@ class HOD_ObjectBuilderForm : JMFormBase
 	protected static ref array<string> s_AllClasses;
 	protected static ref array<string> s_AllLower;
 	protected bool m_Refreshing;
+	protected int m_LastSetRow = -2;
+	protected int m_LastObjRow = -2;
 
 	protected ref array<string> STEP_LABELS = {"Step 0.1 m / 1 deg", "Step 0.5 m / 5 deg", "Step 1 m / 15 deg", "Step 5 m / 45 deg"};
 	protected ref array<float> STEP_M = {0.1, 0.5, 1.0, 5.0};
@@ -36,6 +38,13 @@ class HOD_ObjectBuilderForm : JMFormBase
 		m_SetsList = TextListboxWidget.Cast(layoutRoot.FindAnyWidget("sets_list"));
 		m_ObjectsList = TextListboxWidget.Cast(layoutRoot.FindAnyWidget("objects_list"));
 		m_ClassList = TextListboxWidget.Cast(layoutRoot.FindAnyWidget("class_list"));
+		// route list events straight to this form (they don't always bubble up)
+		if (m_SetsList)
+			m_SetsList.SetHandler(this);
+		if (m_ObjectsList)
+			m_ObjectsList.SetHandler(this);
+		if (m_ClassList)
+			m_ClassList.SetHandler(this);
 
 		// --- sets column
 		Widget setsHeader = layoutRoot.FindAnyWidget("sets_header");
@@ -219,7 +228,38 @@ class HOD_ObjectBuilderForm : JMFormBase
 		{
 			m_SelectedText.SetText("none");
 		}
+		m_LastSetRow = m_SetsList.GetSelectedRow();
+		m_LastObjRow = m_ObjectsList.GetSelectedRow();
 		m_Refreshing = false;
+	}
+
+	// Polled every frame by COT's window: selecting a set opens it, selecting an object selects it.
+	// Doesn't depend on click events reaching the form.
+	override void Update()
+	{
+		super.Update();
+		if (!m_SetsList || m_Refreshing)
+			return;
+
+		int setRow = m_SetsList.GetSelectedRow();
+		if (setRow != m_LastSetRow)
+		{
+			m_LastSetRow = setRow;
+			string name = SelectedSetName();
+			if (name != "" && name != m_Module.CurrentSetName())
+				m_Module.Client_OpenSet(name);
+		}
+
+		int objRow = m_ObjectsList.GetSelectedRow();
+		if (objRow != m_LastObjRow)
+		{
+			m_LastObjRow = objRow;
+			if (objRow >= 0 && objRow != m_Module.m_SelectedIndex)
+			{
+				m_Module.m_SelectedIndex = objRow;
+				RefreshAll();
+			}
+		}
 	}
 
 	override bool OnItemSelected(Widget w, int x, int y, int row, int column, int oldRow, int oldColumn)
@@ -415,8 +455,15 @@ class HOD_ObjectBuilderForm : JMFormBase
 
 	void Click_OpenSet(UIEvent eid, UIActionBase action)
 	{
-		if (eid == UIEvent.CLICK)
-			OpenSelectedSet();
+		if (eid != UIEvent.CLICK)
+			return;
+		if (SelectedSetName() == "")
+		{
+			COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: click a set in the list first"));
+			return;
+		}
+		OpenSelectedSet();
+		COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: opening " + SelectedSetName()));
 	}
 
 	void Click_Refresh(UIEvent eid, UIActionBase action)

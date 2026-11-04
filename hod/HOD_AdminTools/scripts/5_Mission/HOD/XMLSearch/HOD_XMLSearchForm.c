@@ -24,6 +24,8 @@ class HOD_XMLSearchForm : JMFormBase
 		m_Count = UIActionManager.CreateText(top, "Results:", "type at least 2 letters");
 
 		m_Results = TextListboxWidget.Cast(layoutRoot.FindAnyWidget("xml_results"));
+		if (m_Results)
+			m_Results.SetHandler(this);
 
 		Widget det = layoutRoot.FindAnyWidget("xml_details");
 		array<string> labels = {"Class", "On map now", "File", "Nominal / Min", "Lifetime", "Restock", "Quantity", "Cost", "Category", "Usage", "Value (tier)", "Tags", "Flags"};
@@ -201,6 +203,17 @@ class HOD_XMLSearchForm : JMFormBase
 		m_Details[10].SetText(e.values);
 		m_Details[11].SetText(e.tags);
 		m_Details[12].SetText(e.flags);
+	}
+
+	// polled every frame by COT's window - row selection works even if click events don't arrive
+	override void Update()
+	{
+		super.Update();
+		if (!m_Results)
+			return;
+		int row = m_Results.GetSelectedRow();
+		if (row >= 0 && row != m_Selected)
+			SelectRow(row);
 	}
 
 	override bool OnItemSelected(Widget w, int x, int y, int row, int column, int oldRow, int oldColumn)

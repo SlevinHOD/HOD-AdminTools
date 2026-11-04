@@ -240,6 +240,11 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		Param1<string> p;
 		if (type != CallType.Server || !ctx.Read(p) || !Server_Allowed(sender, PERM_VIEW))
 			return;
+		if (!m_Sets.Contains(p.param1))
+		{
+			COTCreateNotification(sender, new StringLocaliser("Object Builder: set '" + p.param1 + "' not found on server"));
+			return;
+		}
 		Server_SendSet(sender, p.param1);
 	}
 
@@ -396,7 +401,10 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		if (!obSet)
 			return;
 		if (!m_ClientSet || m_ClientSet.name != obSet.name)
+		{
 			m_SelectedIndex = -1;
+			COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: opened " + obSet.name + " (" + obSet.objects.Count() + " objects)"));
+		}
 		m_ClientSet = obSet;
 		if (m_SelectedIndex >= obSet.objects.Count())
 			m_SelectedIndex = obSet.objects.Count() - 1;
