@@ -1,166 +1,116 @@
 class JMObjectSpawnerModule: JMRenderableModuleBase
 {
 	int m_ObjSetupMode = COT_ObjectSetupMode.DEBUGSPAWN;
+
+	//! Ammo classname (from the magazine's ammoItems) a spawned magazine is filled with; ""
+	//! keeps its configured ammo. Rides the spawn RPC as module state, like m_ObjSetupMode.
+	string m_SpawnAmmoType;
+
+	//! Upper bounds for a randomised spawn; -1 means "not a range" (value used exactly).
+	//! Rolled per ENTITY on the server, so five inventories get five different values.
+	float m_SpawnQuantityMax = -1;
+	float m_SpawnHealthMax   = -1;
 	bool m_AutoShow;
 	string m_CurrentType;
+	typename m_CurrentScriptType;
 	string m_SearchText;
 	int m_OverrideDebugSpawnDepth;
 
-	//! Items that are unfinished may not work or show properly or may even cause the game to segfault
-	private ref array< string > m_UnfinishedItems =
-	{
-		"quickiebow",
-		"recurvebow",
-		"gp25base",
-		"gp25",
-		"gp25_standalone",
-		"m203base",
-		"m203",
-		"m203_standalone",
-		"red9",
-		"pvcbow",
-		"m249",
-		"undersluggrenadem4",
-		"groza",
-		"trumpet",
-		"lawbase",
-		"law",
-		"rpg7base",
-		"rpg7",
-		"dartgun",
-		"shockpistol",
-		"shockpistol_black",
-		"fnx45_arrow",
-		"makarovpb",
-		"mp133shotgun_pistolgrip",
-
-		"largetentbackpack",
-		"leatherbelt_natural",
-		"leatherbelt_beige",
-		"leatherbelt_brown",
-		"leatherbelt_black",
-		"leatherknifesheath"
-	};
-
-	private ref array< string > m_RestrictedClassNames =
-	{
-		"placing",
-		"debug",
-		"bldr_",
-		"land_",
-		"staticobj_"
-	};
-
+	// Loaded from SpawnerConfig.json - no longer hardcoded
+	protected ref array< string > m_UnfinishedItems     = new array< string >;
+	protected ref array< string > m_RestrictedClassNames = new array< string >;
+	protected ref array< string > m_RestrictedStartClassNames = new array< string >;
 	bool m_AllowRestrictedClassNames;
 	bool m_FilterWithDisplayName;
 
+	static ref TStringArray s_ColorTokens = {};
+	static ref TStringStringMap s_ColorNamesByToken = new TStringStringMap;
+
+	//! classname (lowercased, color token stripped) -> { token -> real classname }. Built once
+	//! from CfgVehicles + CfgWeapons for the module's lifetime (static game data); rescanning
+	//! tens of thousands of entries per "Change Colors" click caused the menu-open lag.
+	protected static ref map<string, ref map<string, string>> s_ColorVariantsByBase;
+
 	void JMObjectSpawnerModule()
 	{
-		GetPermissionsManager().RegisterPermission( "Entity.Spawn.Position" );
-		GetPermissionsManager().RegisterPermission( "Entity.Spawn.Inventory" );
-		GetPermissionsManager().RegisterPermission( "Entity.Delete" );
-		GetPermissionsManager().RegisterPermission( "Entity.View" );
+		InitDefaultColorTokens();
 	}
 
-	override void EnableUpdate()
+	static void InitDefaultColorTokens()
 	{
-	}
+		TStringArray colors = { "DarkBlue", "White", "Black", "Blue", "Red", "Green", "Tan", "Camo", "Orange", "Gey", "Gray", "Yellow", "Wine", "Beige", "Rust", "Gold", "Plum" };
 
-	override void RegisterKeyMouseBindings() 
-	{
-		super.RegisterKeyMouseBindings();
-		
-		Bind( new JMModuleBinding( "SpawnRandomInfected",		"UAObjectModuleSpawnInfected",	true 	) );
-		Bind( new JMModuleBinding( "SpawnRandomAnimal",			"UAObjectModuleSpawnAnimal",	true 	) );
-		Bind( new JMModuleBinding( "SpawnRandomWolf",			"UAObjectModuleSpawnWolf",		true 	) );
-		Bind( new JMModuleBinding( "DeleteCursor",			"UAObjectModuleDeleteOnCursor",	true 	) );
-	}
-
-	override bool HasAccess()
-	{
-		return GetPermissionsManager().HasPermission( "Entity.View" );
-	}
-
-	override void Hide()
-	{
-		m_AutoShow = false;
-
-		super.Hide();
-	}
-
-	override string GetInputToggle()
-	{
-		return "UACOTToggleEntity";
-	}
-
-	override string GetLayoutRoot()
-	{
-		return "JM/COT/GUI/layouts/objectspawner_form.layout";
-	}
-
-	override string GetTitle()
-	{
-		return "#STR_COT_OBJECT_MODULE_NAME";
-	}
-
-	override string GetIconName()
-	{
-		return "JM\\COT\\GUI\\textures\\modules\\Object.paa";
-	}
-
-	override bool ImageIsIcon()
-	{
-		return true;
-	}
-
-	override bool ImageHasPath()
-	{
-		return true;
-	}
-
-	override string GetWebhookTitle()
-	{
-		return "Object Module";
-	}
-
-	override void GetWebhookTypes( out array< string > types )
-	{
-		types.Insert( "Delete" );
-		types.Insert( "Vector" );
-		types.Insert( "Player" );
-	}
-
-	void DeleteCursor( UAInput input )
-	{
-		if ( !input.LocalPress() )
-			return;
-
-		if ( g_Game.GetUIManager().GetMenu() )
-			return;
-
-		if ( !GetPermissionsManager().HasPermission( "Entity.Delete" ) )
-			return;
-
-		if ( !GetCommunityOnlineToolsBase().IsActive() )
+		foreach ( string color: colors )
 		{
-			ShowInactiveNotification("STR_COT_INPUT_DELETE_CROSSHAIR");
-			return;
+			string token = color;
+			token.ToLower();
+
+			s_ColorTokens.Insert( token );
+			s_ColorNamesByToken[token] = color;
+		}
+	}
+
+	//! Which colors "Change Colors" can offer for `entity`: only tokens with a real sibling
+	//! classname on the entity or its attached children. Most vanilla bodies (a car chassis)
+	//! have none, so the full list would be mostly dead rows.
+	array<string> GetAvailableColorVariants(EntityAI entity, int depth = 3)
+	{
+		//auto trace = EXTrace.Start(true);
+		EnsureColorVariantIndex();
+
+		array<string> result = {};
+		if (!entity)
+			return result;
+
+		string typeLower = entity.GetType();
+		typeLower.ToLower();
+
+		map<string, string> variants;
+		if (s_ColorVariantsByBase.Find(typeLower, variants))
+		{
+			if (!variants)
+				return result;
+
+			foreach (string color, string className: variants)
+				result.Insert(color);
+
+			result.Sort();
+		}
+		else
+		{
+			array<string> tokens = GetColorTokens();
+			foreach (string token: tokens)
+			{
+				if (HasColorVariant(entity, token, depth))
+					result.Insert(token);
+			}
 		}
 
-		Object obj = GetObjectAtCursor();
-
-		if (!obj)
-			return;
-
-		m_AutoShow = !IsVisible();
-		if ( m_AutoShow )
-			Show();
-
-		JMObjectSpawnerForm form;
-		if ( Class.CastTo( form, GetForm() ) )
-			form.DeleteCursor(obj);
+		return result;
 	}
-	
+
+	static string GetColorTokenAt(int index)
+	{
+		array<string> tokens = GetColorTokens();
+		if (index < 0 || index >= tokens.Count())
+			return "";
+
+		return tokens[index];
+	}
+
+	static int GetColorTokenIndex(string token)
+	{
+		return GetColorTokens().Find(token);
+	}
+
+	//! The color tokens recognized in a classname (the "blue" in "CivilianSedan_Blue"), shared by
+	//! DetectColorToken and "Change Colors" so both agree what index N means. "darkblue" must
+	//! precede "blue": Contains() takes the first hit and darkblue names contain "blue".
+	static array<string> GetColorTokens()
+	{
+		return s_ColorTokens;
+	}
+
 	//! Default distance is chosen such that if you can see the item hint on HUD, raycast should also hit
 	Object GetObjectAtCursor(bool ignorePlayers = true, float distance = 3.0)
 	{ 
@@ -244,6 +194,15 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 						}
 					}
 
+					foreach (string blacklistedStartName: m_RestrictedStartClassNames)
+					{
+						if ( name.IndexOf(blacklistedStartName) == 0 )
+						{
+							blacklisted = true;
+							break;
+						}
+					}
+
 					if (blacklisted)
 						continue;
 				}
@@ -259,12 +218,208 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 		return obj;
 	}
 
+	//! Read-only walk of `entity` and its attachments (mirrors the walk
+	//! RecolorEntityAndAttachments does to actually perform the swap) -
+	//! true the moment any part has a real sibling classname for `newColor`.
+	protected bool HasColorVariant(EntityAI entity, string newColor, int depth)
+	{
+		if (!entity)
+			return false;
+
+		if (FindColorVariant(entity.GetType(), newColor) != "")
+			return true;
+
+		if (depth <= 0)
+			return false;
+
+		GameInventory inventory = entity.GetInventory();
+		if (!inventory)
+			return false;
+
+		int count = inventory.GetAttachmentSlotsCount();
+		for (int i = 0; i < count; ++i)
+		{
+			int slot_id = inventory.GetAttachmentSlotId(i);
+			if (slot_id == InventorySlots.INVALID || !InventorySlots.GetShowForSlotId(slot_id))
+				continue;
+
+			EntityAI child = inventory.FindAttachment(slot_id);
+			if (child && HasColorVariant(child, newColor, depth - 1))
+				return true;
+		}
+
+		return false;
+	}
+
+	protected static bool HasDelimitedToken(string lower, string token)
+	{
+		return FindDelimitedTokenIndex(lower, token) != -1;
+	}
+
+	bool IsExcludedClassName( string className )
+	{
+		if ( m_UnfinishedItems.Find( className ) > -1 )
+			return true;
+
+		if ( !m_AllowRestrictedClassNames )
+		{
+			foreach ( string restrictedClassName: m_RestrictedClassNames )
+			{
+				if ( className.Contains( restrictedClassName ) )
+					return true;
+			}
+			foreach (string blacklistedStartName: m_RestrictedStartClassNames)
+			{
+				if ( className.IndexOf(blacklistedStartName) == 0 )
+					return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool IsInventoryBase( string path )
+	{
+		TStringArray full_path = new TStringArray;
+		
+		g_Game.ConfigGetFullPath(path, full_path);
+		
+		string cfg_parent_name = "inventory_base";
+		foreach (string tmp: full_path)
+		{
+			tmp.ToLower();
+			if (tmp == cfg_parent_name)
+				return true;
+		}
+	
+		return false;
+	}
+
+	bool IsInventoryType(string type)
+	{
+		if (g_Game.IsKindOf(type, "Inventory_Base"))
+			return true;
+
+		if (g_Game.ConfigIsExisting(CFG_WEAPONSPATH + " " + type))
+			return true;
+
+		if (g_Game.ConfigIsExisting(CFG_MAGAZINESPATH + " " + type))
+			return true;
+
+		return false;
+	}
+
+	override void DescribeModule( JMModuleInfo info )
+	{
+		super.DescribeModule( info );
+
+		info.Title = "#STR_COT_OBJECT_MODULE_NAME";
+		info.WebhookTitle = "Object Module";
+		info.Icon = "package-plus";
+		info.Layout = "JM/COT/GUI/layouts/objectspawner_form.layout";
+		info.Category = JMSideBarConfig.CATEGORY_ITEMS;
+		info.ViewPermission = JMConstants.PERM_ENTITY_VIEW;
+		info.InputToggle = "UACOTToggleEntity";
+		info.SetRPCRange( JMObjectSpawnerModuleRPC.INVALID, JMObjectSpawnerModuleRPC.COUNT );
+
+		//! Called on both client and server as the module registers, before the mission loads.
+		info.AddPermission( JMConstants.PERM_ENTITY_SPAWN_POSITION );
+		info.AddPermission( JMConstants.PERM_ENTITY_SPAWN_INVENTORY );
+		info.AddPermission( JMConstants.PERM_ENTITY_DELETE );
+
+		info.AddWebhookType( "Delete" );
+		info.AddWebhookType( "Vector" );
+		info.AddWebhookType( "Player" );
+	}
+
+	override void OnMissionStart()
+	{
+		super.OnMissionStart();
+
+		if ( IsMissionHost() )
+			LoadSpawnerConfig();
+	}
+
+	protected void LoadSpawnerConfig()
+	{
+		JMSpawnerConfig cfg = JMSpawnerConfig.Load();
+
+		m_UnfinishedItems.Clear();
+		foreach ( string item: cfg.UnfinishedItems )
+			m_UnfinishedItems.Insert( item );
+
+		m_RestrictedClassNames.Clear();
+		foreach ( string pattern: cfg.RestrictedPatterns )
+			m_RestrictedClassNames.Insert( pattern );
+
+		m_RestrictedStartClassNames.Clear();
+		foreach ( string startPattern: cfg.RestrictedStartPatterns )
+			m_RestrictedStartClassNames.Insert( startPattern );
+	}
+
+	override void EnableUpdate()
+	{
+	}
+
+	override void RegisterKeyMouseBindings() 
+	{
+		super.RegisterKeyMouseBindings();
+		
+		Bind( new JMModuleBinding( "SpawnRandomInfected",		"UAObjectModuleSpawnInfected",	true 	) );
+		Bind( new JMModuleBinding( "SpawnRandomAnimal",			"UAObjectModuleSpawnAnimal",	true 	) );
+		Bind( new JMModuleBinding( "SpawnRandomWolf",			"UAObjectModuleSpawnWolf",		true 	) );
+		Bind( new JMModuleBinding( "DeleteCursor",			"UAObjectModuleDeleteOnCursor",	true 	) );
+	}
+
+	override void Hide()
+	{
+		m_AutoShow = false;
+
+		super.Hide();
+	}
+
+	void DeleteCursor( UAInput input )
+	{
+		if ( !input.LocalPress() )
+			return;
+
+		if ( g_Game.GetUIManager().GetMenu() )
+			return;
+
+		if ( !JMPermissions.Has( JMConstants.PERM_ENTITY_DELETE ) )
+			return;
+
+		if ( !GetCommunityOnlineToolsBase().IsActive() )
+		{
+			ShowInactiveNotification("STR_COT_INPUT_DELETE_CROSSHAIR");
+			return;
+		}
+
+		Object obj = GetObjectAtCursor();
+
+		if (!obj)
+			return;
+
+		//! Only stamp m_AutoShow on the press that opens the panel. The confirm flow spans two
+		//! presses with the panel already visible for the second; recomputing from IsVisible()
+		//! would flip it false and the panel would never auto-close after the delete.
+		if ( !IsVisible() )
+		{
+			m_AutoShow = true;
+			Show();
+		}
+
+		JMObjectSpawnerForm form;
+		if ( Class.CastTo( form, GetForm() ) )
+			form.DeleteCursor(obj);
+	}
+
 	void SpawnRandomInfected( UAInput input )
 	{
 		if ( !input.LocalPress() )
 			return;
 
-		if ( !GetPermissionsManager().HasPermission( "Entity.Spawn.Position" ) )
+		if ( !JMPermissions.Has( JMConstants.PERM_ENTITY_SPAWN_POSITION ) )
 			return;
 
 		if ( !GetCommunityOnlineToolsBase().IsActive() )
@@ -284,7 +439,7 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 		if ( !input.LocalPress() )
 			return;
 
-		if ( !GetPermissionsManager().HasPermission( "Entity.Spawn.Position" ) )
+		if ( !JMPermissions.Has( JMConstants.PERM_ENTITY_SPAWN_POSITION ) )
 			return;
 
 		if ( !GetCommunityOnlineToolsBase().IsActive() )
@@ -304,7 +459,7 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 		if ( !input.LocalPress() )
 			return;
 
-		if ( !GetPermissionsManager().HasPermission( "Entity.Spawn.Position" ) )
+		if ( !JMPermissions.Has( JMConstants.PERM_ENTITY_SPAWN_POSITION ) )
 			return;
 
 		if ( !GetCommunityOnlineToolsBase().IsActive() )
@@ -317,16 +472,6 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 		vector position = GetPointerPos();
 
 		SpawnEntity_Position( className, position );
-	}
-	
-	override int GetRPCMin()
-	{
-		return JMObjectSpawnerModuleRPC.INVALID;
-	}
-
-	override int GetRPCMax()
-	{
-		return JMObjectSpawnerModuleRPC.COUNT;
 	}
 
 	override void OnRPC( PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx )
@@ -353,15 +498,23 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 			rpc.Send( obj, JMObjectSpawnerModuleRPC.Delete, true, NULL );
 		}
 		else
-			Server_DeleteEntity( obj, NULL );
+			Exec_DeleteEntity( obj, NULL );
 
 		CF_Modules<JMESPModule>.Get().m_RemoveDeleted = true;
 	}
 
-	private void Server_DeleteEntity( notnull Object obj, PlayerIdentity ident )
+	protected void Exec_DeleteEntity( notnull Object obj, PlayerIdentity ident )
+	{
+		Server_DeleteEntity( obj, ident );
+	}
+
+	//! DEPRECATED - override Exec_DeleteEntity( obj, ident ) instead. Old name, still holds
+	//! the body so a third-party `override Server_DeleteEntity` (ZenCOT) keeps running; an
+	//! override point is not a call, so no runtime warning.
+	protected void Server_DeleteEntity( notnull Object obj, PlayerIdentity ident )
 	{
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "Entity.Delete", ident, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ENTITY_DELETE, ident, instance ) )
 			return;
 
 		PlayerBase player;
@@ -376,21 +529,21 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 		g_Game.ObjectDelete( obj );
 		
 		GetCommunityOnlineToolsBase().Log( ident, "Deleted Entity " + obtype + " at " + transform[3].ToString() );
-		SendWebhook( "Delete", instance, "Deleted object " + obtype + " at " + transform[3].ToString() );
+		SendWebhookColored( "Delete", instance, "Deleted object " + obtype + " at " + transform[3].ToString(), JMConstants.WEBHOOK_COLOR_DANGER );
 	}
 
-	private void RPC_DeleteEntity( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_DeleteEntity( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		if ( IsMissionHost() )
 		{
 			if ( target == NULL )
 				return;
 
-			Server_DeleteEntity( target, senderRPC );
+			Exec_DeleteEntity( target, senderRPC );
 		}
 	}
 
-	private void SpawnEntity_WriteTo(ParamsWriteContext ctx, string className, float quantity, float health, float temp, int itemState)
+	protected void SpawnEntity_WriteTo(ParamsWriteContext ctx, string className, float quantity, float health, float temp, int itemState)
 	{
 		ctx.Write( className );
 		ctx.Write( quantity );
@@ -398,9 +551,12 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 		ctx.Write( temp );
 		ctx.Write( itemState );
 		ctx.Write( m_ObjSetupMode );
+		ctx.Write( m_SpawnAmmoType );
+		ctx.Write( m_SpawnQuantityMax );
+		ctx.Write( m_SpawnHealthMax );
 	}
 
-	private bool SpawnEntity_ReadFrom(ParamsReadContext ctx, out string className, out float quantity, out float health, out float temp, out int itemState)
+	protected bool SpawnEntity_ReadFrom(ParamsReadContext ctx, out string className, out float quantity, out float health, out float temp, out int itemState)
 	{
 		if ( !ctx.Read( className ) )
 			return false;
@@ -418,6 +574,15 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 			return false;
 
 		if ( !ctx.Read( m_ObjSetupMode ) )
+			return false;
+
+		if ( !ctx.Read( m_SpawnAmmoType ) )
+			return false;
+
+		if ( !ctx.Read( m_SpawnQuantityMax ) )
+			return false;
+
+		if ( !ctx.Read( m_SpawnHealthMax ) )
 			return false;
 
 		return true;
@@ -444,22 +609,25 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 			rpc.Send( targetEnt, JMObjectSpawnerModuleRPC.Position, true, NULL );
 		}
 		else if (!targetEnt)
-			Server_SpawnEntity_Position( className, position, quantity, health, temp, itemState, NULL );
+			Exec_SpawnEntity_Position( className, position, quantity, health, temp, itemState, NULL );
 		else
-			Server_SpawnEntity_TargetInventory( className, targetEnt, position, quantity, health, temp, itemState, NULL );
+			Exec_SpawnEntity_TargetInventory( className, targetEnt, position, quantity, health, temp, itemState, NULL );
 	}
 
-	private void Server_SpawnEntity_Position( string className, vector position, float quantity, float health, float temp, int itemState, PlayerIdentity ident )
+	protected void Exec_SpawnEntity_Position( string className, vector position, float quantity, float health, float temp, int itemState, PlayerIdentity ident )
 	{
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "Entity.Spawn.Position", ident, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ENTITY_SPAWN_POSITION, ident, instance ) )
 			return;
 
 		SpawnEntity(className, null, position, quantity, health, temp, itemState, instance);
 	}
 
-	private void RPC_SpawnEntity_Position( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_SpawnEntity_Position( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
+		if ( !senderRPC )
+			return;
+
 		if ( IsMissionHost() )
 		{
 			vector position;
@@ -469,6 +637,9 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 				Error("Failed");
 				return;
 			}
+
+			if ( !COT.IsValidWorldPosition( position ) )
+				return;
 
 			string className;
 			float quantity;
@@ -484,9 +655,9 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 
 			EntityAI targetEnt;
 			if (Class.CastTo(targetEnt, target))
-				Server_SpawnEntity_TargetInventory( className, targetEnt, position, quantity, health, temp, itemState, senderRPC );
+				Exec_SpawnEntity_TargetInventory( className, targetEnt, position, quantity, health, temp, itemState, senderRPC );
 			else
-				Server_SpawnEntity_Position( className, position, quantity, health, temp, itemState, senderRPC );
+				Exec_SpawnEntity_Position( className, position, quantity, health, temp, itemState, senderRPC );
 		}
 	}
 
@@ -500,16 +671,16 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 			rpc.Send( NULL, JMObjectSpawnerModuleRPC.Inventory, true, NULL );
 		}
 		else
-			Server_SpawnEntity_Inventory( className, players, quantity, health, temp, itemState, NULL );
+			Exec_SpawnEntity_Inventory( className, players, quantity, health, temp, itemState, NULL );
 	}
 
-	private void Server_SpawnEntity_Inventory( string className, array< string > players, float quantity, float health, float temp, int itemState, PlayerIdentity ident )
+	protected void Exec_SpawnEntity_Inventory( string className, array< string > players, float quantity, float health, float temp, int itemState, PlayerIdentity ident )
 	{
 		if ( g_Game.IsKindOf( className, "DZ_LightAI" ) )
 			return;
 
 		JMPlayerInstance callerInstance;
-		if ( !GetPermissionsManager().HasPermission( "Entity.Spawn.Inventory", ident, callerInstance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ENTITY_SPAWN_INVENTORY, ident, callerInstance ) )
 			return;
 
 		for ( int i = 0; i < players.Count(); i++ )
@@ -526,7 +697,7 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 		}
 	}
 
-	private void RPC_SpawnEntity_Inventory( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_SpawnEntity_Inventory( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		if ( IsMissionHost() )
 		{
@@ -549,13 +720,13 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 				return;
 			}
 
-			Server_SpawnEntity_Inventory( className, players, quantity, health, temp, itemState, senderRPC );
+			Exec_SpawnEntity_Inventory( className, players, quantity, health, temp, itemState, senderRPC );
 		}
 	}
-	
+
 	void SpawnEntity_Inventory(string className, set<ref JMSelectedObject> targetObjects, float quantity = -1, float health = -1, float temp = -1, int itemState = -1)
 	{
-		if (!GetPermissionsManager().HasPermission("Entity.Spawn.Inventory"))
+		if (!JMPermissions.Has(JMConstants.PERM_ENTITY_SPAWN_INVENTORY))
 			return;
 
 		foreach (JMSelectedObject targetObject: targetObjects)
@@ -574,33 +745,19 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 				}
 				else
 				{
-					Server_SpawnEntity_TargetInventory(className, targetEnt, position, quantity, health, temp, itemState, null);
+					Exec_SpawnEntity_TargetInventory(className, targetEnt, position, quantity, health, temp, itemState, null);
 				}
 			}
 		}
 	}
 
-	private void Server_SpawnEntity_TargetInventory( string className, EntityAI targetEnt, vector position, float quantity, float health, float temp, int itemState, PlayerIdentity ident )
+	protected void Exec_SpawnEntity_TargetInventory( string className, EntityAI targetEnt, vector position, float quantity, float health, float temp, int itemState, PlayerIdentity ident )
 	{
 		JMPlayerInstance callerInstance;
-		if (!GetPermissionsManager().HasPermission("Entity.Spawn.Inventory", ident, callerInstance))
+		if (!JMPermissions.HasRPC(JMConstants.PERM_ENTITY_SPAWN_INVENTORY, ident, callerInstance))
 			return;
 
 		SpawnEntity(className, targetEnt, position, quantity, health, temp, itemState, callerInstance);
-	}
-
-	bool IsInventoryType(string type)
-	{
-		if (g_Game.IsKindOf(type, "Inventory_Base"))
-			return true;
-
-		if (g_Game.ConfigIsExisting(CFG_WEAPONSPATH + " " + type))
-			return true;
-
-		if (g_Game.ConfigIsExisting(CFG_MAGAZINESPATH + " " + type))
-			return true;
-
-		return false;
 	}
 
 	//! @note LocationCreateEntity ignores ECE_EQUIP so we always use ObjectCreateEx and move entity to parent (if given) afterwards
@@ -632,13 +789,19 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 		Object obj = g_Game.CreateObjectEx(type, position, flags);
 
 		if (!obj)
+		{
+			CF_Log.Error("JMObjectSpawnerModule::SpawnEntity failed - CreateObjectEx returned null for class '%1' (flags=%2)", type, flags.ToString());
+			if ( callerInstance && callerInstance.PlayerObject )
+				GetCommunityOnlineToolsBase().Log( callerInstance.PlayerObject.GetIdentity(), "Spawn FAILED for class '" + type + "' - class not found or not spawnable" );
 			return null;
+		}
 
 		EntityAI ent;
 
 		if (!Class.CastTo(ent, obj))
 		{
 			g_Game.ObjectDelete(obj);
+			CF_Log.Error("JMObjectSpawnerModule::SpawnEntity failed - '%1' is not an EntityAI", type);
 			return null;
 		}
 
@@ -668,7 +831,12 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 
 		SetupEntity(ent, quantity, health, temp, itemState, callerInstance.PlayerObject, m_ObjSetupMode);
 
-		if ((flags & ECE_LOCAL) == ECE_LOCAL)
+		//! Ground spawns only: an item that went into an inventory has no world
+		//! position to restore it to, so undo would put it somewhere it never was.
+		if (!parent)
+			JMActionHistory.Push( new JMSpawnHistoryEntry( ent ), JMActionHistory.OwnerOfInstance( callerInstance ) );
+
+		if (g_Game.IsDedicatedServer() && (flags & ECE_LOCAL) == ECE_LOCAL)
 		{
 			g_Game.RemoteObjectTreeDelete(obj);  //! Needed since SetupEntity might have spawned atts, and those wouldn't be created by RemoteObjectTreeCreate if they weren't spawned only locally...
 			g_Game.RemoteObjectTreeCreate(obj);
@@ -692,15 +860,24 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 
 		GetCommunityOnlineToolsBase().Log(callerInstance.PlayerObject.GetIdentity(), msg);
 		if (parent)
-			SendWebhook("Player", callerInstance, msg);
+			SendWebhookColored( "Player", callerInstance, msg, JMConstants.WEBHOOK_COLOR_SPAWN );
 		else
-			SendWebhook("Vector", callerInstance, msg);
+			SendWebhookColored( "Vector", callerInstance, msg, JMConstants.WEBHOOK_COLOR_SPAWN );
 
 		return ent;
 	}
 
-	private void SetupEntity( EntityAI entity, float quantity, float health, float temp, int itemState, PlayerBase player, COT_ObjectSetupMode mode = COT_ObjectSetupMode.NONE )
+	//! Apply the attachment half of a setup mode, nothing else. Apart from SetupEntity so the
+	//! form runs the same pass over its preview entity. Quantity / health / temperature stay
+	//! in SetupEntity: the preview drives those from its own sliders.
+	void SetupEntityForMode( EntityAI entity, PlayerBase player, COT_ObjectSetupMode mode )
 	{
+		if (!g_Game.IsServer())
+		{
+			Error("SetupEntityForMode is unsafe to be called on MP client!");
+			return;
+		}
+
 		switch (mode)
 		{
 			case COT_ObjectSetupMode.DEBUGSPAWN:
@@ -711,7 +888,7 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 				break;
 
 			case COT_ObjectSetupMode.CE:
-				entity.EEOnCECreate();
+				entity.EEOnCECreate();  //! Can only be called on server since SetZoneDamageCEInit calls GetHealth which is an error on client
 				Weapon_Base weapon;
 				if (Class.CastTo(weapon, entity))
 				{
@@ -738,14 +915,44 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 				}
 				break;
 		}
+	}
+
+	//! Pick a value out of a spawn range.
+	//!
+	//! @param high -1, or anything not above `low`, means the range is really a
+	//! single value and `low` is it.
+	protected float RollSpawnValue( float low, float high )
+	{
+		if ( low == -1 || high == -1 || high <= low )
+			return low;
+
+		return Math.RandomFloatInclusive( low, high );
+	}
+
+	protected void SetupEntity( EntityAI entity, float quantity, float health, float temp, int itemState, PlayerBase player, COT_ObjectSetupMode mode = COT_ObjectSetupMode.NONE )
+	{
+		if (!g_Game.IsServer())
+		{
+			Error("SetupEntity is unsafe to be called on MP client!");
+			return;
+		}
+
+		//! Rolled here rather than at the call site: this runs once per spawned
+		//! entity, so every one of them gets its own value.
+		quantity = RollSpawnValue( quantity, m_SpawnQuantityMax );
+		health   = RollSpawnValue( health, m_SpawnHealthMax );
+
+		SetupEntityForMode( entity, player, mode );
 
 		ItemBase item;
 		if ( Class.CastTo( item, entity ) )
 		{
+			Magazine mag;
+			Class.CastTo(mag, item);
+
 			if (quantity != -1)
 			{
-				Magazine mag;
-				if (Class.CastTo(mag, item))
+				if (mag)
 					mag.ServerSetAmmoCount(quantity);
 				else if (item.HasQuantity())
 				{
@@ -755,6 +962,9 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 						item.GetCompEM().SetEnergy0To1(quantity / item.GetQuantityMax());
 				}
 			}
+
+			if (mag && m_SpawnAmmoType != "")
+				FillMagazine(mag, m_SpawnAmmoType, quantity);
 
 			if ( itemState != 0 )
 			{
@@ -777,9 +987,57 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 						foodItem.GetFoodStage().ChangeFoodStage( itemState );
 					}
 				}
+				else if ( item.CanBeDisinfected() )
+				{
+					// itemState is "whatever state this item has": liquid type, cooking stage, or for a
+					// rag/bandage/sewing kit the cleanness flag (mutually exclusive with food/liquid).
+					// allow_client stays false: this runs on the server and the item's own sync
+					// carries the value.
+					item.SetCleanness( itemState );
+				}
 			}
 		}
 
+		SetupEntityHealth( entity, health, temp );
+
+		//! A freshly spawned vehicle with wheels should not start to roll. It doesn't. Set brake anyway to make sure.
+		if (entity.IsTransport())
+			COT.SetBrake(entity, 1.0);
+	}
+
+	//! Refill a magazine with one kind of cartridge. ammoItems lists AMMO PILE classes; cartridges
+	//! are identified by the CfgAmmo class the pile names in its "ammo" entry, and no script call
+	//! takes the pile, so resolve it and store rounds one at a time.
+	//! @param count -1 means "fill it".
+	protected void FillMagazine(Magazine mag, string ammoPile, float count)
+	{
+		string cartridge;
+
+		if (!g_Game.ConfigGetText(CFG_MAGAZINESPATH + " " + ammoPile + " ammo", cartridge) || cartridge == "")
+			return;
+
+		int wanted = mag.GetAmmoMax();
+
+		if (count != -1)
+			wanted = count;
+
+		if (wanted > mag.GetAmmoMax())
+			wanted = mag.GetAmmoMax();
+
+		mag.ServerSetAmmoCount(0);
+
+		for (int i = 0; i < wanted; i++)
+			mag.ServerStoreCartridge(0, cartridge);
+
+		mag.SetSynchDirty();
+	}
+
+	//! Push a global health value onto an entity, its damage zones and, recursively, attachments
+	//! (same PERCENTAGE of their own max health, not the raw number). Split out of SetupEntity
+	//! so the form can run the identical pass over its local preview entity.
+	//! @param health -1 means "full". @param temp -1 means "leave alone".
+	void SetupEntityHealth( EntityAI entity, float health, float temp )
+	{
 		float maxHealth = MiscGameplayFunctions.GetTypeMaxGlobalHealth(entity.GetType());
 		if (maxHealth > 0)
 		{
@@ -805,7 +1063,7 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 					{
 						EntityAI attachment = entity.GetInventory().GetAttachmentFromIndex(i);
 						float attachmentHealth = MiscGameplayFunctions.GetTypeMaxGlobalHealth(attachment.GetType()) * health01;
-						SetupEntity(attachment, -1, attachmentHealth, temp, 0, player, COT_ObjectSetupMode.NONE);
+						SetupEntityHealth(attachment, attachmentHealth, temp);
 					}
 				}
 			}
@@ -815,28 +1073,14 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 			entity.SetTemperatureEx(new TemperatureData(temp));
 	}
 
-	bool IsExcludedClassName( string className )
-	{
-		if ( m_UnfinishedItems.Find( className ) > -1 )
-			return true;
-
-		if ( !m_AllowRestrictedClassNames )
-		{
-			foreach ( string restrictedClassName: m_RestrictedClassNames )
-			{
-				if ( className.Contains( restrictedClassName ) )
-					return true;
-			}
-		}
-
-		return false;
-	}
-
 	void OnDebugSpawn(EntityAI entity, PlayerBase player, int depth = 3) 
 	{
 		ItemBase item;
 		CarScript car;
 		BoatScript boat;
+#ifndef DAYZ_1_29
+		MotorbikeScript bike;
+#endif
 		BuildingBase building;
 		DayZPlayerImplement npc;
 
@@ -849,6 +1093,13 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 			car.COT_OnDebugSpawn(player);
 		else if (Class.CastTo(boat, entity))
 			boat.COT_OnDebugSpawn(player);
+#ifndef DAYZ_1_29
+		//! CarScript/BoatScript get COT_OnDebugSpawn (refuel, etc) via their modded-class override;
+		//! Motorbike needs its own branch too (MotorbikeScript defines COT_OnDebugSpawn), or a
+		//! spawned bike came out with an empty tank.
+		else if (Class.CastTo(bike, entity))
+			bike.COT_OnDebugSpawn(player);
+#endif
 		else if (Class.CastTo(building, entity))
 			building.COT_OnDebugSpawn(player);
 		else if (Class.CastTo(npc, entity))
@@ -860,14 +1111,101 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 		if (!entity.GetInventory())
 			return;
 
-		if (entity.GetInventory().AttachmentCount())
+		if (!entity.GetInventory().AttachmentCount() && !entity.IsInherited(DayZCreature) && !entity.IsInherited(TentBase) && !entity.IsInherited(Weapon_Base))
+		{
+			//! If no atts were spawned, do it ourself (except for creatures, tents & weapons)
+			SpawnCompatibleAttachments(entity, player, depth);
+		}
+
+		//! A colored spawn (e.g. M4A1_Green) gets the matching color variant of whatever
+		//! attachments it came with, where one exists - same classname swap "Change Colors" does.
+		//! Not for vehicles, whose spawn is left as it was, nor for characters, whose gear is not a color set.
+		string spawnColor = GetColorTokenOfType(entity.GetType());
+		if (spawnColor != "" && !entity.IsMan() && !entity.IsTransport())
+			ApplyColorToAttachments(entity, player, spawnColor, depth);
+	}
+
+	//! The color token in a bare classname, "" if it has none. Unlike DetectColorToken
+	//! this ignores attachments: a spawn is colored by what it is, not by whatever
+	//! its default loadout happened to carry.
+	static string GetColorTokenOfType(string type)
+	{
+		type.ToLower();
+
+		array<string> tokens = GetColorTokens();
+		for (int i = 0; i < tokens.Count(); ++i)
+		{
+			if (HasDelimitedToken(type, tokens[i]))
+				return tokens[i];
+		}
+
+		return "";
+	}
+
+	//! Swap every attachment of `entity` that has a `color` sibling classname for it,
+	//! descending `depth` levels into attachments that have none. Attachments are
+	//! replaced rather than retyped (there is no in-place retype in this engine), and
+	//! the replacement is given its own default attachments the same way the original was.
+	protected void ApplyColorToAttachments(EntityAI entity, PlayerBase player, string color, int depth)
+	{
+		GameInventory inventory = entity.GetInventory();
+		if (!inventory)
 			return;
 
-		if (entity.IsInherited(DayZCreature)  || entity.IsInherited(TentBase) || entity.IsInherited(Weapon_Base))
-			return;
+		//! Collected first: replacing an attachment while walking the inventory would shift the indices
+		array<EntityAI> attachments = new array<EntityAI>;
+		int count = inventory.AttachmentCount();
+		int i;
+		for (i = 0; i < count; ++i)
+		{
+			EntityAI att = inventory.GetAttachmentFromIndex(i);
+			if (att)
+				attachments.Insert(att);
+		}
 
-		//! If no atts were spawned, do it ourself (except for creatures, tents & weapons)
-		SpawnCompatibleAttachments(entity, player, depth);
+		for (i = 0; i < attachments.Count(); ++i)
+		{
+			EntityAI attachment = attachments[i];
+			string originalType = attachment.GetType();
+			string variant = FindColorVariant(originalType, color, true);
+
+			if (variant == "")
+			{
+				if (depth > 0)
+					ApplyColorToAttachments(attachment, player, color, depth - 1);
+
+				continue;
+			}
+
+			InventoryLocation location = new InventoryLocation;
+			if (!attachment.GetInventory().GetCurrentInventoryLocation(location) || location.GetType() != InventoryLocationType.ATTACHMENT)
+				continue;
+
+			int slotId = location.GetSlot();
+
+			g_Game.ObjectDelete(attachment);
+
+			//! A weapon's magazine is attached and filled through the weapon, same as the attachments page does it
+			Weapon_Base weapon;
+			if (slotId == InventorySlots.MAGAZINE && Class.CastTo(weapon, entity))
+			{
+				if (!weapon.SpawnAmmo(variant))
+					weapon.SpawnAmmo(originalType);
+
+				continue;
+			}
+
+			EntityAI recolored = inventory.CreateAttachmentEx(variant, slotId);
+			if (!recolored)
+			{
+				//! Never leave the slot emptier than the variant swap found it
+				inventory.CreateAttachmentEx(originalType, slotId);
+				continue;
+			}
+
+			if (depth > 0)
+				OnDebugSpawn(recolored, player, depth - 1);
+		}
 	}
 
 	//! @note this does what vanilla EntityAI::OnDebugSpawn *should* be doing (get inventorySlot as array, use slot IDs instead of case-sensitive match of slot names, filter bad items)
@@ -897,9 +1235,12 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 			slot_id = inventory.GetAttachmentSlotId(i);
 			if (slot_id != InventorySlots.INVALID && InventorySlots.GetShowForSlotId(slot_id))
 			{
-				string att = InventorySlots.GetSlotName(slot_id);
-				CF_Log.Info("Entity %1 has visible attachment slot %2 (ID %3)", entity.GetType(), att, slot_id.ToString());
-				slot_ids.Insert(slot_id);
+				if (!inventory.FindAttachment(slot_id))
+				{
+					string att = InventorySlots.GetSlotName(slot_id);
+					CF_Log.Info("Entity %1 has visible attachment slot %2 (ID %3)", entity.GetType(), att, slot_id.ToString());
+					slot_ids.Insert(slot_id);
+				}
 			}
 		}
 
@@ -941,11 +1282,14 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 					if (g_Game.ConfigIsExisting(path + " Nutrition"))
 						continue;
 
-					TStringArray inv_slots = {};
-					g_Game.ConfigGetTextArray(path + " inventorySlot", inv_slots);
+					TStringArray inv_slots = g_Game.COT_GetInventorySlots(path);
 
 					foreach (string inv_slot: inv_slots)
 					{
+						inv_slot.ToLower();
+						if (inv_slot == "weaponwrap")
+							continue;
+
 						slot_id = InventorySlots.GetSlotIdFromString(inv_slot);
 						if (slot_id != InventorySlots.INVALID)
 						{
@@ -989,21 +1333,513 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 		}
 	}
 
-	bool IsInventoryBase( string path )
+	//! Plain Contains() matches tokens as coincidental substrings ("tan" in an unrelated name),
+	//! poisoning the variant index bucket with colors that do not exist. Real variants are
+	//! underscore-delimited ("Hatchback_02_White"), so require "_" (or string start/end) on both sides.
+	protected static int FindDelimitedTokenIndex(string lower, string token)
 	{
-		TStringArray full_path = new TStringArray;
-		
-		g_Game.ConfigGetFullPath(path, full_path);
-		
-		string cfg_parent_name = "inventory_base";
-		foreach (string tmp: full_path)
+		//auto trace = EXTrace.Profile(true, JMObjectSpawnerModule, "FindDelimitedTokenIndex");
+
+		if (token == "")  //! safety, LastIndexOf freezes if passed empty string
+			return -1;
+
+		int idx = lower.LastIndexOf(token);
+		if (idx == -1)
+			return -1;
+
+		if (idx != 0 && lower[idx - 1] != "_")
+			return -1;
+
+		int tokenLen = token.Length();
+		int lowerLen = lower.Length();
+		int afterIdx = idx + tokenLen;
+		if (afterIdx != lowerLen && lower[afterIdx] != "_")
+			return -1;
+
+		return idx;
+	}
+
+	//! Strip a delimited token match plus exactly one bordering "_" (the
+	//! trailing one if there is one, else the leading one) so that e.g.
+	//! "hatchback_02_white" and "hatchback_02_blue" normalize to the same
+	//! "hatchback_02" base regardless of which color they started as.
+	protected static string StripDelimitedToken(string lower, int idx, int tokenLen)
+	{
+		//auto trace = EXTrace.Start(true);
+		int lowerLen = lower.Length();
+		int removeStart = idx;
+		int removeEnd = idx + tokenLen;
+
+		if (removeEnd < lowerLen && lower[removeEnd] == "_")
+			removeEnd = removeEnd + 1;
+		else if (removeStart > 0 && lower[removeStart - 1] == "_")
+			removeStart = removeStart - 1;
+
+		string before = lower.Substring(0, removeStart);
+		string after = lower.Substring(removeEnd, lowerLen - removeEnd);
+		return before + after;
+	}
+
+	string DetectColorToken(EntityAI entity)
+	{
+		if (!entity)
+			return "";
+
+		string typeToken = GetColorTokenOfType(entity.GetType());
+		if (typeToken != "")
+			return typeToken;
+
+		if (entity.GetInventory())
 		{
-			tmp.ToLower();
-			if (tmp == cfg_parent_name)
-				return true;
+			int attCount = entity.GetInventory().AttachmentCount();
+			for (int j = 0; j < attCount; ++j)
+			{
+				EntityAI att = entity.GetInventory().GetAttachmentFromIndex(j);
+				if (!att)
+					continue;
+
+				string attToken = GetColorTokenOfType(att.GetType());
+				if (attToken != "")
+					return attToken;
+			}
 		}
-	
-		return false;
+
+		return "";
+	}
+
+	void SpawnCompatibleAttachmentsWithColor(EntityAI entity, PlayerBase player, int depth = 3, string preferredColor = "")
+	{
+		if (!entity)
+			return;
+
+		if (preferredColor == "")
+			preferredColor = DetectColorToken(entity);
+
+		CF_Log.Debug("JMObjectSpawnerModule::SpawnCompatibleAttachments %1 %2 %3", entity.ToString(), player.ToString(), depth.ToString());
+
+		GameInventory inventory = entity.GetInventory();
+		if (!inventory)
+			return;
+
+		int count = inventory.GetAttachmentSlotsCount();
+		if (count == 0)
+			return;
+
+		array<int> slot_ids = new array<int>;
+		int slot_id;
+		int i;
+
+		for (i = 0; i < count; ++i)
+		{
+			slot_id = inventory.GetAttachmentSlotId(i);
+			if (slot_id != InventorySlots.INVALID && InventorySlots.GetShowForSlotId(slot_id))
+			{
+				if (!inventory.FindAttachment(slot_id))
+				{
+					string att = InventorySlots.GetSlotName(slot_id);
+					CF_Log.Info("Entity %1 has visible, empty attachment slot %2 (ID %3)", entity.GetType(), att, slot_id.ToString());
+					slot_ids.Insert(slot_id);
+				}
+			}
+		}
+
+		if (slot_ids.Count() == 0)
+			return;
+
+		TStringArray all_paths = new TStringArray;
+		all_paths.Insert(CFG_VEHICLESPATH);
+		all_paths.Insert(CFG_WEAPONSPATH);
+
+		map<int, ref TStringArray> slotCandidates = new map<int, ref TStringArray>;
+		for (i = 0; i < slot_ids.Count(); ++i)
+		{
+			slotCandidates.Insert(slot_ids[i], new TStringArray);
+		}
+
+		string child_name;
+		int scope;
+		string path;
+		string model;
+
+		foreach (string config_path: all_paths)
+		{
+			int children_count = g_Game.ConfigGetChildrenCount(config_path);
+
+			for (i = 0; i < children_count; i++)
+			{
+				g_Game.ConfigGetChildName(config_path, i, child_name);
+				path = config_path + " " + child_name;
+				scope = g_Game.ConfigGetInt(path + " scope");
+
+				if (scope == 2)
+				{
+					if (!g_Game.ConfigGetText(path + " model", model) || model == string.Empty || model == "bmp")
+						continue;
+
+					if (g_Game.ConfigIsExisting(path + " Nutrition"))
+						continue;
+
+					array<string> inv_slots = g_Game.COT_GetInventorySlots(path);
+
+					foreach (string inv_slot: inv_slots)
+					{
+						inv_slot.ToLower();
+						if (inv_slot == "weaponwrap")
+							continue;
+
+						slot_id = InventorySlots.GetSlotIdFromString(inv_slot);
+						if (slot_id != InventorySlots.INVALID && slotCandidates.Contains(slot_id))
+						{
+							string lowerChild = child_name;
+							lowerChild.ToLower();
+							if (IsExcludedClassName(lowerChild))
+								continue;
+
+							if (entity.IsMan() && !g_Game.IsKindOf(lowerChild, "Clothing_Base"))
+								continue;
+
+							TStringArray candList = slotCandidates.Get(slot_id);
+							if (candList.Find(child_name) == -1)
+								candList.Insert(child_name);
+						}
+					}
+				}
+			}
+		}
+
+		foreach (int targetSlot: slot_ids)
+		{
+			TStringArray candidates = slotCandidates.Get(targetSlot);
+			if (!candidates || candidates.Count() == 0)
+				continue;
+
+			string bestMatch = "";
+			if (preferredColor != "")
+			{
+				for (int c = 0; c < candidates.Count(); ++c)
+				{
+					string candLower = candidates[c];
+					candLower.ToLower();
+					if (HasDelimitedToken(candLower, preferredColor))
+					{
+						bestMatch = candidates[c];
+						break;
+					}
+				}
+			}
+
+			if (bestMatch == "")
+				bestMatch = candidates[0];
+
+			EntityAI child = inventory.CreateAttachmentEx(bestMatch, targetSlot);
+			if (child)
+			{
+				string slotName = InventorySlots.GetSlotName(targetSlot);
+				CF_Log.Info("Successfully spawned %1 in slot %2 on %3", bestMatch, slotName, entity.GetType());
+
+				if (depth > 0)
+					SpawnCompatibleAttachmentsWithColor(child, player, depth - 1, preferredColor);
+			}
+		}
+	}
+
+	protected static void EnsureColorVariantIndex()
+	{
+		//auto trace = EXTrace.Start(true);
+		if (s_ColorVariantsByBase)
+			return;
+
+		s_ColorVariantsByBase = new map<string, ref map<string, string>>;
+
+		array<string> tokens = GetColorTokens();
+		string token;
+
+		//! TODO/FIXME: Too much individual iteration of the whole Cfg* tree in various places scattered all across
+		//! COT - if we are going to build various lookup tables, we should do that in ONE place
+		TStringArray all_paths = new TStringArray;
+		all_paths.Insert(CFG_VEHICLESPATH);
+		all_paths.Insert(CFG_WEAPONSPATH);
+
+		string child_name;
+		foreach (string config_path: all_paths)
+		{
+			int children_count = g_Game.ConfigGetChildrenCount(config_path);
+
+			for (int i = 0; i < children_count; i++)
+			{
+				g_Game.ConfigGetChildName(config_path, i, child_name);
+
+				string child_path = config_path + " " + child_name;
+				if (g_Game.ConfigGetInt(child_path + " scope") != 2)
+					continue;
+
+				string model;
+				if (!g_Game.ConfigGetText(child_path + " model", model) || model == string.Empty || model == "bmp")
+					continue;
+
+				string color;
+				if (g_Game.ConfigGetText(child_path + " color", color) && color != "")
+				{
+					token = color;
+					token.ToLower();
+					if (!s_ColorNamesByToken.Contains(token))
+					{
+						tokens.Insert(token);
+						s_ColorNamesByToken[token] = color;
+					}
+				}
+
+			#ifdef DZ_Expansion_Core
+				string skinName;
+				if (g_Game.ConfigGetText(child_path + " skinName", skinName) && skinName != "")
+				{
+					token = skinName;
+					token.ToLower();
+					if (!s_ColorNamesByToken.Contains(token))
+					{
+						tokens.Insert(token);
+						s_ColorNamesByToken[token] = skinName;
+					}
+				}
+			#endif
+
+				string lower = child_name;
+				lower.ToLower();
+
+				for (int t = 0; t < tokens.Count(); ++t)
+				{
+					int tokenIdx = FindDelimitedTokenIndex(lower, tokens[t]);
+					if (tokenIdx == -1)
+						continue;
+
+					string base = StripDelimitedToken(lower, tokenIdx, tokens[t].Length());
+
+					map<string, string> variants = s_ColorVariantsByBase.Get(base);
+					if (!variants)
+					{
+						variants = new map<string, string>;
+						s_ColorVariantsByBase.Insert(base, variants);
+					}
+
+					//! First classname found for this (base, token) wins - good
+					//! enough, since a mod defining two siblings with the same
+					//! color token is not a case worth picking between.
+					if (!variants.Contains(tokens[t]))
+						variants.Insert(tokens[t], child_name);
+
+					break;
+				}
+			}
+		}
+	}
+
+	//! Find `sourceClass` with its color token swapped for `newColor` ("CivilianSedan_Blue" ->
+	//! "..._White"); "" if no token to swap or no such classname. `allowUntokened` also resolves
+	//! token-less names ("M4_OEBttstck" -> "..._Green"): off for "Change Colors", on for a fresh
+	//! spawn whose default attachments should match.
+	string FindColorVariant(string sourceClass, string newColor, bool allowUntokened = false)
+	{
+		//auto trace = EXTrace.Start(true);
+		EnsureColorVariantIndex();
+
+		string lowerSource = sourceClass;
+		lowerSource.ToLower();
+
+		map<string, string> variants;
+		string variant;
+
+		if (s_ColorVariantsByBase.Find(lowerSource, variants))
+		{
+			if (!variants || !variants.Find(newColor, variant))
+				return "";
+
+			string variantLower = variant;
+			variantLower.ToLower();
+
+			if (variantLower == lowerSource)
+				return "";
+
+			return variant;
+		}
+
+		array<string> tokens = GetColorTokens();
+		string oldToken = "";
+		int oldTokenIdx = -1;
+		//auto trace2 = EXTrace.Start(true, this, sourceClass + " " + newColor + " foreach (string token: tokens)");
+		//! @note slow loop
+		for (int t = 0; t < tokens.Count(); ++t)
+		{
+			oldTokenIdx = FindDelimitedTokenIndex(lowerSource, tokens[t]);
+			if (oldTokenIdx != -1)
+			{
+				oldToken = tokens[t];
+				break;
+			}
+		}
+		//trace2 = null;
+
+		string base = lowerSource;
+		if (oldToken != "")
+			base = StripDelimitedToken(lowerSource, oldTokenIdx, oldToken.Length());
+
+		if (!s_ColorVariantsByBase.Find(base, variants))
+			variants = null;
+
+		s_ColorVariantsByBase[lowerSource] = variants;
+
+		if (!variants || !variants.Find(newColor, variant))
+			return "";
+
+		if (oldToken == newColor)
+			return "";
+
+		if (oldToken == "" && !allowUntokened)
+			return "";
+
+		return variant;
+	}
+
+	//! "Change Colors": snapshot `entity` and all attachments/cargo recursively (the capture
+	//! JMLoadoutModule uses for deletion backups), swap each classname for its `newColor`
+	//! sibling, then respawn (no in-place retype API). Returns the new entity; the old one dies.
+	EntityAI RecolorEntityAndAttachments(EntityAI entity, PlayerBase player, string newColor, int depth = 3)
+	{
+		if (!entity || newColor == "")
+			return entity;
+
+		JMLoadoutModule loadoutModule;
+		if (!CF_Modules<JMLoadoutModule>.Get(loadoutModule))
+			return entity;
+
+		//! Create a snapshot of only the entity + attachments, not cargo. Everything else is later transferred from the original entity
+		//! @note depth has a different meaning between JMLoadoutItem and SpawnCompatibleAttachments/WithColor
+		//! For JMLoadoutItem, depth = 0 means only this item, not its attachments
+		//! For SpawnCompatibleAttachments/WithColor, depth = 0 means spawn attachments on this entity, but not on the created child attachments
+		JMLoadoutItem snapshot = new JMLoadoutItem(entity, depth + 1, false);
+		RecolorLoadoutItem(snapshot, newColor, depth + 1);
+
+	#ifdef DIAG_DEVELOPER
+		JMJsonFile<JMLoadoutItem>.Save("$profile:COT_Recolor_Snapshot.json", snapshot);
+	#endif
+
+		//! Move old entity out of the way since we will recreate in same spot
+		entity.SetPosition(vector.Zero);
+
+		EntityAI recreated = loadoutModule.SpawnItem(snapshot, snapshot.m_LocalPosition, false);
+		if (!recreated)
+			return null;
+
+		//! JMLoadoutModule::SpawnItem may use PlaceOnSurfaceAtPosition which may alter position and orientation,
+		//! but we want exact values of original entity
+		recreated.SetPosition(snapshot.m_LocalPosition);
+		recreated.SetOrientation(snapshot.m_LocalRotation);
+
+		//! Transfer atts & cargo (atts only get transfered if the recreated entity has nothing in the respective slot)
+		//! @note it is completely expected and not an error for there to be attachments that failed to transfer because
+		//! JMLoadoutModule::SpawnItem will already have spawned recolored atts. We then use the failed array to transfer
+		//! att inventory (if any) and properties
+		array<EntityAI> failed = {};
+		TransferInventoryResult result = COT.TransferInventory(entity, recreated, false, null, failed);
+
+	#ifdef DIAG_DEVELOPER
+		PrintFormat("Transfered inventory of %1 to %2, result %3, failed %4", entity, recreated, typename.EnumToString(TransferInventoryResult, result), failed);
+	#endif
+
+		bool syncWeaponState;
+
+		//! JMLoadoutModule::SetupItem uses Weapon_Base::COTFillInnerMagazine which already syncs, so we only need to sync if gun has no internal mag or quantity (ammo count) is zero
+		Weapon_Base weapon;
+		if (Class.CastTo(weapon, recreated) && (!weapon.HasInternalMagazine(-1) || snapshot.m_Data.m_Quantity == 0))
+			syncWeaponState = true;
+
+		//! Check if each child that failed to transfer is an attachment,
+		//! and transfer its inventory (if any) to the attachment in same slot on recreated entity
+		foreach (EntityAI child: failed)
+		{
+			InventoryLocation il = new InventoryLocation();
+			if (!child.GetInventory().GetCurrentInventoryLocation(il))
+				continue;
+
+			if (il.GetType() == InventoryLocationType.ATTACHMENT)
+			{
+				int slot = il.GetSlot();
+				EntityAI recreatedAtt = recreated.GetInventory().FindAttachment(slot);
+				if (recreatedAtt)
+				{
+					if (!child.IsEmpty())
+					{
+						result = COT.TransferInventory(child, recreatedAtt, false);
+
+					#ifdef DIAG_DEVELOPER
+						PrintFormat("Transfered inventory of %1 to %2, result %3", child, recreatedAtt, typename.EnumToString(TransferInventoryResult, result));
+					#endif
+					}
+
+					if (syncWeaponState && child.IsMagazine())
+						syncWeaponState = false;  //! JMLoadoutModule::SpawnInItem uses Weapon_Base::COTSpawnAttachedMagazine which already syncs
+
+					if (COT.IsSameBaseKind(child, recreatedAtt))
+						COT.TransferPersistentVariables(child, recreatedAtt);
+				}
+			}
+			else
+			{
+				if (g_Game.IsMultiplayer())
+					recreated.GetInventory().DropEntity(InventoryMode.SERVER, recreated, child);
+				else
+					recreated.GetInventory().DropEntity(InventoryMode.LOCAL, recreated, child);
+			}
+		}
+
+		//! Anything still empty after the recolored respawn gets filled the
+		//! same way Repair & Fill Slots already does - e.g. a slot the
+		//! original had nothing in, which a fresh spawn of this classname
+		//! would otherwise fill in whatever color the config defaults to.
+		if (recreated)
+			SpawnCompatibleAttachmentsWithColor(recreated, player, depth, newColor);
+
+		if (snapshot.m_Data && snapshot.m_Data.m_Health != -1)
+		{
+			//! Set health of individual damage zones
+			TStringArray dmgZonesSrc = {};
+			TStringArray dmgZonesDst = {};
+			entity.GetDamageZones(dmgZonesSrc);
+			recreated.GetDamageZones(dmgZonesDst);
+			foreach (string dmgZone: dmgZonesSrc)
+			{
+				if (dmgZonesDst.Find(dmgZone) > -1)
+					recreated.SetHealth(dmgZone, "Health", entity.GetHealth(dmgZone, "Health"));
+			}
+		}
+
+		if (COT.IsSameBaseKind(entity, recreated))
+			COT.TransferPersistentVariables(entity, recreated);
+
+		if (syncWeaponState)
+			weapon.Synchronize();
+		
+		g_Game.ObjectDelete(entity);
+
+		return recreated;
+	}
+
+	//! Mutate a captured snapshot's classname, and recursively every
+	//! attachment/cargo entry's, to the `newColor` sibling wherever one
+	//! exists - left as-is (contents intact) where there is none.
+	protected void RecolorLoadoutItem(JMLoadoutItem_Base item, string newColor, int depth)
+	{
+		if (!item)
+			return;
+
+		string variant = FindColorVariant(item.m_Classname, newColor);
+		if (variant != "")
+			item.m_Classname = variant;
+
+		if (depth <= 0 || !item.m_Attachments)
+			return;
+
+		foreach (JMLoadoutSubItem sub: item.m_Attachments)
+			RecolorLoadoutItem(sub, newColor, depth - 1);
 	}
 
 	void Command_Spawn(JMCommandParameterList params, PlayerIdentity sender, JMPlayerInstance instance)
@@ -1043,7 +1879,7 @@ class JMObjectSpawnerModule: JMRenderableModuleBase
 
 	override void GetSubCommands(inout array<ref JMCommand> commands)
 	{
-		AddSubCommand(commands, "spawn", "Command_Spawn", "Entity.Spawn.Position");
+		AddSubCommand(commands, "spawn", "Command_Spawn", JMConstants.PERM_ENTITY_SPAWN_POSITION);
 	}
 
 	override array<string> GetCommandNames()

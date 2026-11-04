@@ -44,6 +44,7 @@ class CfgMods
 		defines[] =
 		{
 			"JM_COT",
+			"COT_2026_1020",
 			//"JM_COT_LOGGING",
 			//"JM_COT_ESP_DEBUG",
 			//"JM_COT_WEBHOOK_DEBUG",
@@ -52,16 +53,33 @@ class CfgMods
 			"COT_BUGFIX_REF_UIACTIONS",
 			"COT_UIACTIONS_SETWIDTH",
 			"COT_REFRESHSTATS_NEW",
-			"JM_COT_VEHICLEMANAGER",
 			"JM_COT_INVISIBILITY",
 			"JM_COT_EXPTRANSITION_1",
 			"JM_COT_DEBUGMONITOR_REMOVED",
-			"JM_COT_ENABLE_INDIVIDUAL_PERMS",
-			"COT_ANYSPECTATE"
+			//"JM_COT_ENABLE_INDIVIDUAL_PERMS",
+			"COT_ANYSPECTATE",
+			"COT_SPECTATOR_TRACKING",
+			"COT_ONRECEIVE_PROPER",
+			"COT_UNIFIED_OPENCLOSE",
+			"COT_UNIFIED_LOCKING"
 		};
 		
 		class defs
 		{
+			class imageSets
+			{
+				files[]=
+				{
+					"JM/COT/GUI/imagesets/cot_gui.imageset"
+				};
+			};
+			class widgetStyles
+			{
+				files[]=
+				{
+					"JM/COT/GUI/styles/cot.styles"
+				};
+			};
 			class engineScriptModule
 			{
 				value = "";
@@ -97,7 +115,6 @@ class CfgMods
 				files[] =
 				{
 					"JM/COT/Scripts/Common",
-					"VPPAdminTools/Definitions",
 					"JM/COT/Scripts/5_Mission"
 				};
 			};

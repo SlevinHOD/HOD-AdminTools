@@ -1,19 +1,34 @@
 class CommunityOnlineTools: CommunityOnlineToolsBase
 {
+	//! Floor on how often one admin's activation toggle may reach the webhook.
+	static const int ACTIVE_MIN_INTERVAL_MS = 2000;
+
 	void CommunityOnlineTools()
 	{
-		GetPermissionsManager().RegisterPermission( "Admin.Player.Read" );
-		GetPermissionsManager().RegisterPermission( "Admin.Roles.Update" );
-		GetPermissionsManager().RegisterPermission("Actions.QuickActions");
+		JMPermissions.Register( JMConstants.PERM_PLAYER_READ );
+		JMPermissions.Register( JMConstants.PERM_ROLES_UPDATE );
+		JMPermissions.Register(JMConstants.PERM_ACTIONS_QUICKACTIONS);
 	}
 
 	void ~CommunityOnlineTools()
 	{
 	}
-	
+
+	override void CloseSharedMenu()
+	{
+		JMESPActionMenu menu = JMESPActionMenu.Shared( false );
+
+		if ( menu )
+			menu.Close();
+	}
+
 	override void OnStart()
 	{
 		super.OnStart();
+
+		#ifdef JM_COT_AUTOTEST
+		JMAutoTest_TryRun();
+		#endif
 	}
 
 	override void OnFinish()
@@ -32,6 +47,48 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 
 		super.OnLoaded();
 	}
+
+#ifndef SERVER
+	override void OnItemAttached( EntityAI parent, string slotName, EntityAI item )
+	{
+		//! Deferred so that quantity etc set after creation have been applied by that point
+		if ( JMESPActionMenu.GetMenuForEntityIfOpen( parent ) )
+			g_Game.GetCallQueue( CALL_CATEGORY_SYSTEM ).Call( UpdateActionMenu, "itemattached", parent, slotName, item );
+	}
+
+	override void OnItemDetached( EntityAI parent, string slotName, EntityAI item )
+	{
+		UpdateActionMenu( "itemdetached", parent, slotName, item );
+	}
+
+	override void OnVariablesSynchronized( EntityAI entity )
+	{
+		//! TODO: Find a better way to determine when construction changed
+		if ( entity.CanUseConstruction() )
+			UpdateActionMenu( "constructionsync", entity, "" );
+	}
+
+	void UpdateActionMenu( string action, EntityAI entity, string arg, EntityAI item = null )
+	{
+		JMESPActionMenu menu = JMESPActionMenu.GetMenuForEntityIfOpen( entity );
+
+		if ( !menu )
+			return;
+
+		switch ( action )
+		{
+			case "itemattached":
+			case "itemdetached":
+				menu.OnItemAttachmentChanged( JMESPActionMenu.PAGE_ATTACHMENTS, arg, item );
+				break;
+
+			case "constructionsync":
+				if ( menu.ConstructionPartsChanged() )
+					menu.OnConstructionAction( JMESPActionMenu.PAGE_BUILD, arg );
+				break;
+		}
+	}
+#endif
 
 	override void OnRPC( PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx )
 	{
@@ -58,6 +115,12 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 				break;
 			case JMClientRPC.SetClient:
 				RPC_SetClient( ctx, sender, target );
+				break;
+			case JMClientRPC.UpdateClientBatch:
+				RPC_UpdateClientBatch( ctx, sender, target );
+				break;
+			case JMClientRPC.UpdateClientPositionBatch:
+				RPC_UpdateClientPositionBatch( ctx, sender, target );
 				break;
 			}
 		} else if ( rpc_type > JMRoleRPC.INVALID && rpc_type < JMRoleRPC.COUNT )
@@ -102,7 +165,7 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		}
 	}
 
-	private void RPC_Active( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_Active( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_1(this, "RPC_Active").Add(senderRPC);
@@ -112,27 +175,45 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		if ( !ctx.Read( active ) )
 			return;
 
-		JMPlayerInstance instance = GetPermissionsManager().GetPlayer( senderRPC.GetId() );
-
-		if (!instance)
+		if ( !senderRPC )
 			return;
 
-		auto message = m_Webhook.CreateDiscordMessage();
-		
+		//! Same permission the sidebar needs to open at all. Without it any player could forge
+		//! admin-activation audit entries and flood the Discord endpoint, one post per packet.
+		JMPlayerInstance instance;
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_COT_VIEW, senderRPC, instance ) )
+			return;
+
+		if ( !instance )
+			return;
+
+		//! Nothing changed, so nothing to announce. A toggle held down, or a
+		//! client repeating itself, is not another activation.
+		if ( m_ActiveGUIDs.Contains( senderRPC.GetId() ) && m_ActiveGUIDs.Get( senderRPC.GetId() ) == active )
+			return;
+
+		//! Even a permitted admin cannot spend the webhook faster than this.
+		if ( !JMRPCThrottle.Allow( senderRPC.GetId(), "cot_active", ACTIVE_MIN_INTERVAL_MS ) )
+			return;
+
+		auto message = m_Webhook.CreateDiscordMessageColored( JMConstants.WEBHOOK_COLOR_WARNING );
+
 		if ( active )
 		{
-			message.GetEmbed().AddField( "Admin Activity", "" + instance.FormatSteamWebhook() + " has activated Community Online Tools" );
+			message.GetEmbed().SetTitle( "Admin Activated COT" );
+			message.GetEmbed().SetDescription( instance.FormatSteamWebhook() + " has activated Community Online Tools." );
 			GetCommunityOnlineToolsBase().Log( senderRPC, "Activated Community Online Tools [guid=" + instance.GetGUID() + "]" );
 		}
 		else
 		{
-			message.GetEmbed().AddField( "Admin Activity", "" + instance.FormatSteamWebhook() + " has de-activated Community Online Tools" );
+			message.GetEmbed().SetTitle( "Admin Deactivated COT" );
+			message.GetEmbed().SetDescription( instance.FormatSteamWebhook() + " has de-activated Community Online Tools." );
 			GetCommunityOnlineToolsBase().Log( senderRPC, "Deactivated Community Online Tools [guid=" + instance.GetGUID() + "]" );
 		}
 
 		m_ActiveGUIDs[senderRPC.GetId()] = active;
 
-		m_Webhook.Post( "AdminActive", message );
+		m_Webhook.PostAs( "AdminActive", message, instance );
 	}
 
 	override void RefreshClients()
@@ -148,37 +229,45 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		}
 	}
 
-	private void RPC_RefreshClients( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_RefreshClients( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_1(this, "RPC_RefreshClients").Add(senderRPC);
 		#endif
 
-		if ( !GetPermissionsManager().HasPermission( "Admin.Player.Read", senderRPC ) )
+		if ( !senderRPC )
 			return;
 
-		#ifdef SERVER
-		ScriptRPC rpc = new ScriptRPC();
-		#endif
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_PLAYER_READ, senderRPC ) )
+			return;
 
 		if ( IsMissionHost() )
 		{
 			array< JMPlayerInstance > players = GetPermissionsManager().GetPlayers();
 
+			//! One array send for the whole roster instead of one unicast RPC
+			//! per connected player - this used to fire N separate RPCs every
+			//! refresh, and the Players tab refreshes on a 1.5s timer while
+			//! it's open (see JMPlayerForm.UpdatePlayerList).
+			#ifdef SERVER
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write( players.Count() );
+			#endif
+
 			for ( int i = 0; i < players.Count(); i++ )
 			{
 				players[i].Update();
-				
+
 				#ifdef SERVER
 				rpc.Write( players[i].PlayerObject );
 				rpc.Write( players[i].GetGUID() );
 				players[i].OnSend( rpc, senderRPC.GetId() );
-
-				rpc.Send( NULL, JMClientRPC.UpdateClient, true, senderRPC );
-
-				rpc.Reset();
 				#endif
 			}
+
+			#ifdef SERVER
+			rpc.Send( NULL, JMClientRPC.UpdateClientBatch, true, senderRPC );
+			#endif
 		}
 	}
 
@@ -191,20 +280,26 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		}
 	}
 
-	private void RPC_RefreshClientPositions( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_RefreshClientPositions( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_1(this, "RPC_RefreshClientPositions").Add(senderRPC);
 		#endif
 
-		if ( !GetPermissionsManager().HasPermission( "Admin.Player.Teleport.Position", senderRPC ) )
+		if ( !senderRPC )
 			return;
 
-		ScriptRPC rpc = new ScriptRPC();
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_PLAYER_TELEPORT_POSITION, senderRPC ) )
+			return;
 
 		if ( IsMissionHost() )
 		{
 			array< JMPlayerInstance > players = GetPermissionsManager().GetPlayers();
+
+			//! One array send for the whole roster instead of one unicast RPC
+			//! per connected player - same batching as RPC_RefreshClients.
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write( players.Count() );
 
 			for ( int i = 0; i < players.Count(); i++ )
 			{
@@ -212,11 +307,9 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 
 				rpc.Write( players[i].GetGUID() );
 				players[i].OnSendPosition( rpc );
-
-				rpc.Send( NULL, JMClientRPC.UpdateClientPosition, true, senderRPC );
-
-				rpc.Reset();
 			}
+
+			rpc.Send( NULL, JMClientRPC.UpdateClientPositionBatch, true, senderRPC );
 		}
 	}
 
@@ -226,13 +319,17 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		{
 			m_ActiveGUIDs.Remove(guid);
 
+			//! Their rate limit windows go with them, so a reconnect does not
+			//! inherit a cooldown from the session before it.
+			JMRPCThrottle.Clear(guid);
+
 			ScriptRPC rpc = new ScriptRPC();
 			rpc.Write( guid );
 			rpc.Send( NULL, JMClientRPC.RemoveClient, true, NULL );
 		}
 	}
 
-	private void Client_RemoveClient( string guid )
+	protected void Client_RemoveClient( string guid )
 	{
 		JMPlayerInstance instance;
 		GetPermissionsManager().OnClientDisconnected( guid, instance );
@@ -240,7 +337,7 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		JM_GetSelected().RemovePlayer( guid );
 	}
 
-	private void RPC_RemoveClient( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_RemoveClient( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_1(this, "RPC_RemoveClient").Add(senderRPC);
@@ -273,7 +370,7 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		}
 	}
 
-	private void Client_UpdateClient( string guid, ParamsReadContext ctx, PlayerBase playerObj )
+	protected void Client_UpdateClient( string guid, ParamsReadContext ctx, PlayerBase playerObj )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_2(this, "Client_UpdateClient").Add(guid).Add(playerObj.ToString());
@@ -282,7 +379,9 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		GetPermissionsManager().UpdatePlayer( guid, ctx, playerObj );
 	}
 
-	private void Server_UpdateClient( string guid, PlayerIdentity sendTo )
+	//! @note methods that only run on server and have a client equivalent (Server_/Client method pair) should not be prefixed Exec_,
+	//! that's reserved for methods that can run both on client or server
+	protected void Server_UpdateClient( string guid, PlayerIdentity sendTo )
 	{
 		JMPlayerInstance player = GetPermissionsManager().GetPlayer( guid );
 		if ( !player )
@@ -298,7 +397,7 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		rpc.Send( NULL, JMClientRPC.UpdateClient, true, sendTo );
 	}
 
-	private void RPC_UpdateClient( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_UpdateClient( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_1(this, "RPC_UpdateClient").Add(senderRPC);
@@ -306,7 +405,10 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 
 		if ( g_Game.IsServer() )
 		{
-			if ( !GetPermissionsManager().HasPermission( "Admin.Player.Read", senderRPC ) )
+			if ( !senderRPC )
+				return;
+
+			if ( !JMPermissions.HasRPC( JMConstants.PERM_PLAYER_READ, senderRPC ) )
 				return;
 
 			string guid;
@@ -328,7 +430,7 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		}
 	}
 
-	private void RPC_UpdateClientPosition( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_UpdateClientPosition( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_1(this, "RPC_UpdateClientPosition").Add(senderRPC);
@@ -346,7 +448,74 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 				return;
 			}
 
-			player.OnRecievePosition( ctx );
+			player.OnReceivePosition( ctx );
+		}
+	}
+
+	//! Batched reply to RPC_RefreshClients - one player entry per iteration,
+	//! same wire shape RPC_UpdateClient's client branch already reads.
+	protected void RPC_UpdateClientBatch( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	{
+		#ifdef JM_COT_DIAG_LOGGING
+		auto trace = CF_Trace_1(this, "RPC_UpdateClientBatch").Add(senderRPC);
+		#endif
+
+		if ( !g_Game.IsClient() )
+			return;
+
+		int count;
+		if ( !ctx.Read( count ) )
+			return;
+
+		GetPermissionsManager().OnRosterBatchReceived();
+
+		for ( int i = 0; i < count; i++ )
+		{
+			PlayerBase po;
+			if ( !ctx.Read( po ) )
+				return;
+
+			string pg;
+			if ( !ctx.Read( pg ) )
+				return;
+
+			Client_UpdateClient( pg, ctx, po );
+		}
+	}
+
+	//! Batched reply to RPC_RefreshClientPositions. A guid this client does
+	//! not know yet still has its position bytes read and discarded, so the
+	//! stream stays aligned for the remaining entries in the same message.
+	protected void RPC_UpdateClientPositionBatch( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	{
+		#ifdef JM_COT_DIAG_LOGGING
+		auto trace = CF_Trace_1(this, "RPC_UpdateClientPositionBatch").Add(senderRPC);
+		#endif
+
+		if ( !g_Game.IsClient() )
+			return;
+
+		int count;
+		if ( !ctx.Read( count ) )
+			return;
+
+		for ( int i = 0; i < count; i++ )
+		{
+			string guid;
+			if ( !ctx.Read( guid ) )
+				return;
+
+			JMPlayerInstance player = GetPermissionsManager().GetPlayer( guid );
+			if ( player )
+			{
+				if ( !player.OnReceivePosition( ctx ) )
+					return;
+			} else
+			{
+				float x, y, z;
+				if ( !ctx.Read( x ) || !ctx.Read( y ) || !ctx.Read( z ) )
+					return;
+			}
 		}
 	}
 
@@ -358,10 +527,7 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 
 		if ( IsMissionOffline() )
 		{
-			ScriptReadWriteContext rwctx = new ScriptReadWriteContext;
-			player.OnSend( rwctx.GetWriteContext() );
-
-			Client_SetClient( player.GetGUID(), rwctx.GetReadContext() );
+			Client_SetClient( player.GetGUID(), null );
 		} else if ( IsMissionHost() )
 		{
 			Server_SetClient( player );
@@ -376,17 +542,14 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 
 		if ( IsMissionOffline() )
 		{
-			ScriptReadWriteContext rwctx = new ScriptReadWriteContext;
-			player.OnSend( rwctx.GetWriteContext() );
-
-			Client_SetClient( player.GetGUID(), rwctx.GetReadContext() );
+			Client_SetClient( player.GetGUID(), null );
 		} else if ( IsMissionHost() )
 		{
 			Server_SetClient( player, identity );
 		}
 	}
 
-	private void Client_SetClient( string guid, ParamsReadContext ctx )
+	protected void Client_SetClient( string guid, ParamsReadContext ctx )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_1(this, "Client_SetClient").Add(guid);
@@ -394,16 +557,22 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 
 		GetPermissionsManager().SetClientGUID( guid );
 
-		GetPermissionsManager().UpdatePlayer( guid, ctx, PlayerBase.Cast( g_Game.GetPlayer() ) );
-
-		GetModuleManager().OnClientPermissionsUpdated();
+		if ( g_Game.IsMultiplayer() )
+			GetPermissionsManager().UpdatePlayer( guid, ctx, PlayerBase.Cast( g_Game.GetPlayer() ) );  //! UpdatePlayer will call GetModuleManager().OnClientPermissionsUpdated()
+		else
+			GetModuleManager().OnClientPermissionsUpdated();
 	}
 
-	private void Server_SetClient( JMPlayerInstance player )
+	//! @note methods that only run on server and have a client equivalent (Server_/Client method pair) should not be prefixed Exec_,
+	//! that's reserved for methods that can run both on client or server
+	protected void Server_SetClient( JMPlayerInstance player )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_1(this, "Server_SetClient").Add(player.GetGUID());
 		#endif
+
+		if ( !player.PlayerObject.GetIdentity() )
+			return;
 
 		ScriptRPC rpc = new ScriptRPC();
 		rpc.Write( player.GetGUID() );
@@ -413,7 +582,9 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		rpc.Send( NULL, JMClientRPC.SetClient, true, player.PlayerObject.GetIdentity() );
 	}
 
-	private void Server_SetClient( JMPlayerInstance player, PlayerIdentity identity )
+	//! @note methods that only run on server and have a client equivalent (Server_/Client method pair) should not be prefixed Exec_,
+	//! that's reserved for methods that can run both on client or server
+	protected void Server_SetClient( JMPlayerInstance player, PlayerIdentity identity )
 	{
 		ScriptRPC rpc = new ScriptRPC();
 		rpc.Write( player.GetGUID() );
@@ -423,7 +594,7 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		rpc.Send( NULL, JMClientRPC.SetClient, true, identity );
 	}
 
-	private void RPC_SetClient( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_SetClient( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_1(this, "RPC_SetClient").Add(senderRPC);
@@ -439,6 +610,8 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		}
 	}
 
+	//! @note methods meant to only run on server should not be prefixed Exec_,
+	//! that's reserved for methods that can run both on client or server
 	override void UpdateRole( JMRole role, PlayerIdentity toSendTo )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
@@ -451,7 +624,7 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		}
 	}
 
-	private void Client_UpdateRole( string roleName, ParamsReadContext ctx )
+	protected void Client_UpdateRole( string roleName, ParamsReadContext ctx )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_1(this, "Client_UpdateRole").Add(roleName);
@@ -461,13 +634,22 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		GetPermissionsManager().LoadRole( roleName, role );
 		if ( role )
 		{
-			role.RootPermission.OnReceive(ctx);
+			#ifdef DIAG_DEVELOPER
+			#ifdef DZ_Expansion_Core
+			EXError.Info(this, string.Format("Receiving permissions for role %1", roleName));
+			#endif
+			#endif
+
+			if (!role.RootPermission.OnReceive(ctx))
+				CF.FormatError("Couldn't receive permissions for role %1", roleName);
 		}
 
 		GetModuleManager().OnClientPermissionsUpdated();
 	}
 
-	private void Server_UpdateRole( JMRole role, PlayerIdentity toSendTo )
+	//! @note methods that only run on server and have a client equivalent (Server_/Client method pair) should not be prefixed Exec_,
+	//! that's reserved for methods that can run both on client or server
+	protected void Server_UpdateRole( JMRole role, PlayerIdentity toSendTo )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_2(this, "Server_UpdateRole").Add(role.Name).Add(toSendTo.GetId());
@@ -476,13 +658,18 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		if ( g_Game.IsServer() )
 		{
 			ScriptRPC rpc = new ScriptRPC();
+			#ifdef DIAG_DEVELOPER
+			#ifdef DZ_Expansion_Core
+			EXError.Info(this, string.Format("Sending permissions for role %1", role.Name));
+			#endif
+			#endif
 			rpc.Write( role.Name );
 			role.RootPermission.OnSend(rpc);
 			rpc.Send( NULL, JMRoleRPC.UpdateRole, true, toSendTo );
 		}
 	}
 
-	private void RPC_UpdateRole( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_UpdateRole( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_0(this, "RPC_UpdateRole");
@@ -504,6 +691,22 @@ class CommunityOnlineTools: CommunityOnlineToolsBase
 		if (CF_Modules<JMObjectSpawnerModule>.Get(objSpawnerModule))
 			objSpawnerModule.SpawnCompatibleAttachments(entity, player, depth);
 	}
+
+	override void SpawnCompatibleAttachmentsWithColor(EntityAI entity, PlayerBase player, int depth = 3, string preferredColor = "")
+	{
+		JMObjectSpawnerModule objSpawnerModule;
+		if (CF_Modules<JMObjectSpawnerModule>.Get(objSpawnerModule))
+			objSpawnerModule.SpawnCompatibleAttachmentsWithColor(entity, player, depth, preferredColor);
+	}
+
+	override EntityAI RecolorEntityAndAttachments(EntityAI entity, PlayerBase player, string newColor, int depth = 3)
+	{
+		JMObjectSpawnerModule objSpawnerModule;
+		if (CF_Modules<JMObjectSpawnerModule>.Get(objSpawnerModule))
+			return objSpawnerModule.RecolorEntityAndAttachments(entity, player, newColor, depth);
+
+		return entity;
+	}
 }
 
 
@@ -511,3 +714,10 @@ CommunityOnlineTools GetCommunityOnlineTools()
 {
 	return CommunityOnlineTools.Cast( g_cotBase );
 }
+
+CommunityOnlineTools GetCOT()
+{
+	return CommunityOnlineTools.Cast( g_cotBase );
+}
+
+typedef CommunityOnlineTools COT;

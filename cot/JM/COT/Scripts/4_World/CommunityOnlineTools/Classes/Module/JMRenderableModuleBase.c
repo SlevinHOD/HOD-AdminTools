@@ -1,15 +1,128 @@
 class JMRenderableModuleBase: JMModuleBase
 {
-	private ref CF_Window m_Window;
-	private JMFormBase m_Form;
+	protected ref JMWindowBase m_Window;
+	protected JMFormBase m_Form;
+	protected ButtonWidget m_MenuButton;
 
-	private ButtonWidget m_MenuButton;
-
-	private int m_MenuButtonColour = 0;
+	//! Tint over this module's sidebar entry, marking whether its window is open.
+	protected int m_MenuButtonColour = JMTheme.TRANSPARENT;
 
 	void JMRenderableModuleBase()
 	{
-		SetMenuButtonColour( 1, 1, 0, 0 );
+		SetMenuButtonColor( JMTheme.TRANSPARENT );
+	}
+
+	string GetCategory()
+	{
+		string category = GetModuleInfo().Category;
+		if ( category != "" )
+			return category;
+
+		return JMSideBarConfig.CATEGORY_OTHER;
+	}
+
+	JMFormBase GetForm()
+	{
+		return m_Form;
+	}
+
+	string GetIconName()
+	{
+		string lucide = GetLucideIcon();
+		if ( lucide != "" )
+			return JMConstants.Lucide( lucide );
+
+		return "";
+	}
+
+	string GetImageSet()
+	{
+		return "";
+	}
+
+	string GetInputToggle()
+	{
+		return GetModuleInfo().InputToggle;
+	}
+
+	string GetLayoutRoot()
+	{
+		return GetModuleInfo().Layout;
+	}
+
+	string GetLocalisedTitle()
+	{
+		string text = Widget.TranslateString( "#" + GetTitle() );
+
+		if ( text == "" || text.Get( 0 ) == " " )
+		{
+			return GetTitle();
+		}
+		
+		return text;
+	}
+
+	//! The one override a module needs for its sidebar icon: a Lucide icon name,
+	//! e.g. "sparkles". When set, GetIconName / ImageIsIcon / ImageHasPath all
+	//! follow from it and none of them needs overriding.
+	string GetLucideIcon()
+	{
+		return GetModuleInfo().Icon;
+	}
+
+	ButtonWidget GetMenuButton()
+	{
+		return m_MenuButton;
+	}
+
+	string GetTitle()
+	{
+		return GetModuleInfo().Title;
+	}
+
+	//! Open to whoever holds JMModuleInfo.ViewPermission; to everybody when the module names none.
+	bool HasAccess()
+	{
+		string permission = GetModuleInfo().ViewPermission;
+		if ( permission == "" )
+			return true;
+
+		return JMPermissions.Has( permission );
+	}
+
+	bool HasButton()
+	{
+		return GetModuleInfo().HasButton;
+	}
+
+	bool IsVisible()
+	{
+		if ( !m_Window )
+			return false;
+		
+		return m_Window.IsVisible();
+	}
+
+	void SetForm(JMFormBase form)
+	{
+		m_Form = form;
+	}
+
+	//! Set the sidebar entry tint directly. Prefer a JMTheme token.
+	void SetMenuButtonColor( int color )
+	{
+		m_MenuButtonColour = color;
+
+		if ( m_MenuButton )
+			m_MenuButton.SetColor( m_MenuButtonColour );
+	}
+
+	//! Legacy float overload, kept so external callers keep compiling.
+	//! @note ARGB takes ( a, r, g, b ); an earlier version passed ( r, g, b, alpha ),
+	//! so SetMenuButtonColour( 1, 1, 0, 0 ) came out opaque red. Order is fixed now.
+	void SetMenuButtonColour( float r, float g, float b, float alpha )
+	{
+		SetMenuButtonColor( ARGB( alpha * 255, r * 255, g * 255, b * 255 ) );
 	}
 
 #ifndef DAYZ_1_26
@@ -25,71 +138,68 @@ class JMRenderableModuleBase: JMModuleBase
 
 	bool InitButton( Widget button_bkg )
 	{
-		#ifdef COT_DEBUGLOGS
-		Print( "+" + this + "::InitButton" );
-		#endif
+
+		if ( !button_bkg )
+		{
+			Error("[JMRenderableModuleBase] InitButton failed: button_bkg is null!");
+			return false;
+		}
 
 		Class.CastTo( m_MenuButton, button_bkg.FindAnyWidget( "btn" ) );
 
-		if ( button_bkg && m_MenuButton )
+		if ( !m_MenuButton )
 		{
-			m_MenuButton.SetColor( m_MenuButtonColour );
+			Error("[JMRenderableModuleBase] InitButton failed: m_MenuButton (widget 'btn') is null!");
+			return false;
+		}
 
-			TextWidget ttl = TextWidget.Cast( button_bkg.FindAnyWidget( "ttl" ) );
+		m_MenuButton.SetColor( m_MenuButtonColour );
+
+		TextWidget ttl = TextWidget.Cast( button_bkg.FindAnyWidget( "ttl" ) );
+		if ( ttl )
 			ttl.SetText( GetLocalisedTitle() );
 
-			ImageWidget btn_img = ImageWidget.Cast( button_bkg.FindAnyWidget( "btn_img" ) );
-			TextWidget btn_txt = TextWidget.Cast( button_bkg.FindAnyWidget( "btn_txt" ) );
+		ImageWidget btn_img = ImageWidget.Cast( button_bkg.FindAnyWidget( "btn_img" ) );
+		TextWidget btn_txt = TextWidget.Cast( button_bkg.FindAnyWidget( "btn_txt" ) );
 
-			if ( ImageIsIcon() )
+		string iconName = GetIconName();
+
+		if ( ImageIsIcon() )
+		{
+			if ( btn_txt ) btn_txt.Show( false );
+			if ( btn_img )
 			{
-				btn_txt.Show( false );
 				btn_img.Show( true );
 
 				if (ImageHasPath())
-					btn_img.LoadImageFile( 0, GetIconName());
+				{
+					btn_img.LoadImageFile( 0, iconName );
+				}
 				else
-					btn_img.LoadImageFile( 0, "set:" + GetImageSet() + " image:" + GetIconName() );
-			} else
+				{
+					string setRef = "set:" + GetImageSet() + " image:" + iconName;
+					btn_img.LoadImageFile( 0, setRef );
+				}
+			}
+		}
+		else
+		{
+			if ( btn_txt )
 			{
 				btn_txt.Show( true );
-				btn_img.Show( false );
-
-				btn_txt.SetText( GetIconName() );
+				btn_txt.SetText( iconName );
 			}
-
-			#ifdef COT_DEBUGLOGS
-			Print( "-" + this + "::InitButton true" );
-			#endif
-			return true;
+			if ( btn_img ) btn_img.Show( false );
 		}
 
-		#ifdef COT_DEBUGLOGS
-		Print( "-" + this + "::InitButton" );
-		#endif
-		return false;
+		return true;
 	}
 
-	void SetMenuButtonColour( float r, float g, float b, float alpha )
+	//! Ask for whatever the module's form displays. The form's base OnShow() calls this
+	//! on every open, so a module needs only: override void RequestData() { RequestBanList(); }
+	//! The named request stays public for refresh buttons and other callers.
+	void RequestData()
 	{
-		m_MenuButtonColour = ARGB( r * 255, g * 255, b * 255, alpha * 255 );
-		if ( m_MenuButton )
-			m_MenuButton.SetColor( m_MenuButtonColour );
-	}
-
-	ButtonWidget GetMenuButton()
-	{
-		return m_MenuButton;
-	}
-
-	void SetForm(JMFormBase form)
-	{
-		m_Form = form;
-	}
-
-	JMFormBase GetForm()
-	{
-		return m_Form;
 	}
 
 	JMFormBase InitForm( Widget root )
@@ -98,88 +208,21 @@ class JMRenderableModuleBase: JMModuleBase
 		return NULL;
 	}
 
-	string GetInputToggle()
-	{
-		return "";
-	}
-
-	string GetLayoutRoot()
-	{
-		return "";
-	}
-
-	string GetTitle()
-	{
-		return "";
-	}
-
-	string GetLocalisedTitle()
-	{
-		string text = Widget.TranslateString( "#" + GetTitle() );
-
-		if ( text == "" || text.Get( 0 ) == " " )
-		{
-			return GetTitle();
-		}
-		
-		return text;
-	}
-
-	string GetImageSet()
-	{
-		return "";
-	}
-
-	string GetIconName()
-	{
-		return "";
-	}
-
 	bool ImageIsIcon()
 	{
-		return false;
+		return GetLucideIcon() != "";
 	}
 
 	bool ImageHasPath()
 	{
-		return false;
-	}
-
-	bool HasAccess()
-	{
-		return true;
-	}
-
-	bool HasButton()
-	{
-		return true;
-	}
-
-	bool IsVisible()
-	{
-		#ifdef CF_WINDOWS
-		return m_Window != null;
-		#else
-		if ( !m_Window )
-			return false;
-		
-		return m_Window.IsVisible();
-		#endif
+		return GetLucideIcon() != "";
 	}
 
 	void Show()
 	{
+
 		if ( HasAccess() )
 		{
-			#ifdef CF_WINDOWS
-			m_Window = new CF_Window();
-			
-			Widget widgets = m_Window.CreateWidgets(GetLayoutRoot());
-			
-			widgets.GetScript(m_Form);
-			
-			m_Form.Init(m_Window, this);
-			#else
 			if ( !m_Window )
 			{
 				m_Window = GetCOTWindowManager().Create();
@@ -187,7 +230,9 @@ class JMRenderableModuleBase: JMModuleBase
 			}
 
 			m_Window.Show();
-			#endif
+		}
+		else
+		{
 		}
 	}
 
@@ -200,13 +245,19 @@ class JMRenderableModuleBase: JMModuleBase
 	{
 		if (m_Window)
 		{
-			m_Window.DestroyLater();
+			m_Window.Close();
 		}
+	}
+
+	void OnWindowDestroyed()
+	{
+		m_Window = NULL;
 	}
 
 	void ToggleShow()
 	{
-		if ( IsVisible() ) 
+
+		if ( IsVisible() )
 		{
 			Close();
 		} else
@@ -224,7 +275,7 @@ class JMRenderableModuleBase: JMModuleBase
 				ShowInactiveNotification(GetTitle());
 				return;
 			}
-			
+
 			Show();
 		}
 	}
@@ -268,7 +319,7 @@ class JMRenderableModuleBase: JMModuleBase
 			Hide();
 		}
 	}
-	
+
 	override void RegisterKeyMouseBindings() 
 	{
 		super.RegisterKeyMouseBindings();

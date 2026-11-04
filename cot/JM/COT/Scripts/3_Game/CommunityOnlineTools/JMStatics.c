@@ -2,74 +2,110 @@ class JMStatics
 {
 	static Widget ESP_CONTAINER;
 	static Widget COT_MENU;
-
 	static Widget WINDOWS_CONTAINER;
 
-	static void SortStringArray( out array< string > arr )
+	//! Floating overlays: popups parented outside their window so it cannot clip them.
+	//! COTModule finds COT UI clicks by walking ancestors for a window; an overlay fails
+	//! that test, reads as a world click and the game grabs the mouse mid-drag.
+	//! Registering the overlay's root makes the walk recognise it.
+	static ref array<Widget> OVERLAY_WIDGETS;
+
+	static ref ScriptInvoker SERVER_STATS_TICK;
+
+	static bool IsOverlay( Widget w )
 	{
-		int count = arr.Count();
-		string strs[ 1000 ];
+		if ( !w || !OVERLAY_WIDGETS )
+			return false;
 
-		for ( int i = 0; i < count; i++ )
-		{
-			strs[ i ] = arr[ i ];
-		}
-
-		Sort( strs, count );
-
-		arr.Clear();
-
-		for ( i = 0; i < count; i++ )
-		{
-			arr.Insert( strs[i] );
-		}
+		return OVERLAY_WIDGETS.Find( w ) != -1;
 	}
 
-	static void SortStringArrayKVPair( out array< string > arrKey, out array< string > arrValue )
+	static void AddOverlay( Widget w )
 	{
-		if ( arrKey.Count() != arrValue.Count() )
+		if ( !w )
 			return;
 
-		int count = arrKey.Count();
+		if ( !OVERLAY_WIDGETS )
+			OVERLAY_WIDGETS = new array<Widget>;
 
-		string strs[ 1000 ];
-		int pIndices[ 1000 ];
+		if ( OVERLAY_WIDGETS.Find( w ) == -1 )
+			OVERLAY_WIDGETS.Insert( w );
+	}
 
-		for ( int i = 0; i < count; i++ )
+	static void RemoveOverlay( Widget w )
+	{
+		if ( !w || !OVERLAY_WIDGETS )
+			return;
+
+		int idx = OVERLAY_WIDGETS.Find( w );
+		if ( idx != -1 )
+			OVERLAY_WIDGETS.RemoveOrdered( idx );
+	}
+
+	//! DEPRECATED - use AddOverlay
+	static void RegisterOverlay( Widget w )
+	{
+		JMDeprecated.WarnOnce( null, "JMStatics.RegisterOverlay() is deprecated. Please use AddOverlay()." );
+		AddOverlay( w );
+	}
+
+	//! DEPRECATED - use RemoveOverlay
+	static void UnregisterOverlay( Widget w )
+	{
+		JMDeprecated.WarnOnce( null, "JMStatics.UnregisterOverlay() is deprecated. Please use RemoveOverlay()." );
+		RemoveOverlay( w );
+	}
+
+	[Obsolete("Use array::Sort")]
+	static void SortStringArray( TStringArray values )
+	{
+		values.Sort();
+	}
+
+	//! @note optimized for speed, works best if each value is unique when ignoring case.
+	//! If values are not unique when ignoring case, the last occurence of each repeating value will be chosen.
+	//! E.g. if values is {"ONE", "Two", "One", "TWO", "Three"}, then the resulting array will be {"One", "One", "Three", "TWO", "TWO"}
+	static void SortStringArrayIgnoreCase( TStringArray values, bool reverse = false )
+	{
+		TStringArray keys = {};
+		TStringStringMap keyToValue = new TStringStringMap;
+
+		foreach ( string value: values )
 		{
-			strs[ i ] = arrKey[ i ];
+			string valueLower = value;
+			valueLower.ToLower();
+			keys.Insert( valueLower );
+			keyToValue[valueLower] = value;
 		}
 
-		Sort( strs, count );
+		SortStringArrayHelper( keys, keyToValue, values, reverse );
+	}
 
-		for ( i = 0; i < arrKey.Count(); i++ )
+	static void SortStringArrayKVPair( TStringArray keys, TStringArray values, bool reverse = false )
+	{
+		if ( keys.Count() != values.Count() )
+			return;
+
+		TStringStringMap keyToValue = new TStringStringMap;
+
+		foreach ( int i, string key: keys )
 		{
-			for ( int j = 0; j < arrKey.Count(); j++ )
-			{
-				if ( strs[j] == arrKey[i] )
-				{
-					pIndices[i] = j;
-				}
-			}
+			keyToValue[key] = values[i];
 		}
 
-		array< string > narrKey = new array< string >;
-		array< string > narrValue = new array< string >;
+		SortStringArrayHelper( keys, keyToValue, values, reverse );
+	}
 
-		narrKey.Resize( count );
-		narrValue.Resize( count );
+	static void SortStringArrayHelper( TStringArray keys, TStringStringMap keyToValue, TStringArray values, bool reverse = false )
+	{
+		keys.Sort( reverse );
 
-		for ( i = 0; i < count; i++ )
+		values.Clear();
+
+		foreach ( string key: keys )
 		{
-			narrKey.Set( pIndices[i], arrKey[i] );
-			narrValue.Set( pIndices[i], arrValue[i] );
+			values.Insert( keyToValue[key] );
 		}
-
-		arrKey.Clear();
-		arrValue.Clear();
-
-		arrKey.Copy( narrKey );
-		arrValue.Copy( narrValue );
 	}
 
 	//! @note joinked from ExpansionString

@@ -1,16 +1,24 @@
-class JMMapForm: JMFormBase 
+class JMMapForm: JMFormBase
 {
-	private MapWidget m_MapWidget;
-	private Widget m_BackgroundWidget;
+	protected MapWidget m_MapWidget;
+	protected Widget m_BackgroundWidget;
+	protected JMMapModule m_Module;
+	protected vector m_TeleportPosition;
+	protected ref array<string> m_LootMarkerNames;
+	protected ref array<vector> m_LootMarkerPositions;
 
-	private JMMapModule m_Module;
+	void SetLootMarkers(array<string> names, array<vector> positions)
+	{
+		m_LootMarkerNames = names;
+		m_LootMarkerPositions = positions;
+		// Full redraw so existing marks (players + old loot) are cleared first
+		UpdateMapMarkers();
+	}
 
-	private vector m_TeleportPosition;
-	
-	override void OnInit()
+	override void OnCreate()
 	{
 		#ifdef COT_DEBUGLOGS
-		Print( "+" + this + "::OnInit" );
+		Print( "+JMMapForm::OnCreate" );
 		#endif
 
 		m_MapWidget = MapWidget.Cast( layoutRoot.FindAnyWidget( "map_widget" ) );
@@ -19,7 +27,7 @@ class JMMapForm: JMFormBase
 		m_BackgroundWidget.Show( false );
 
 		#ifdef COT_DEBUGLOGS
-		Print( "-" + this + "::OnInit" );
+		Print( "-JMMapForm::OnCreate" );
 		#endif
 	}
 
@@ -27,15 +35,16 @@ class JMMapForm: JMFormBase
 	{
 		return Class.CastTo( m_Module, mdl );
 	}
-	
+
 	override void OnShow()
 	{
-		if ( !GetPermissionsManager().HasPermission( "Admin.Map.View" ) )
+		if ( !JMPermissions.Has( JMConstants.PERM_MAP_VIEW ) )
 			return;
 
-		g_Game.GetCallQueue( CALL_CATEGORY_GUI ).CallLater( UpdateMapPosition, 34, false, true, vector.Zero );
+		auto param = new Param2< bool, vector >( true, vector.Zero );
+		DeferCall( "UpdateMapPosition", 34, false, param );
 
-		g_Game.GetCallQueue( CALL_CATEGORY_GUI ).CallLater( UpdateMapMarkers, 1000, true );
+		DeferCall( "UpdateMapMarkers", 1000, true );
 	}
 
 	void UpdateMapPosition( bool usePlayerPosition, vector mapPosition = vector.Zero )
@@ -58,7 +67,7 @@ class JMMapForm: JMFormBase
 
 	override void OnHide() 
 	{
-		g_Game.GetCallQueue( CALL_CATEGORY_GUI ).Remove( UpdateMapMarkers );
+		CancelDeferredCall( "UpdateMapMarkers" );
 	}
 
 	void UpdateMapMarkers()
@@ -66,11 +75,38 @@ class JMMapForm: JMFormBase
 		m_MapWidget.ClearUserMarks();
 
 		UpdatePlayers();
+		UpdateLootMarkers();
+
+#ifdef EXPANSIONMODNAVIGATION
+		UpdateExpansionMarkers();
+		UpdateExpansionSafezones();
+#endif
 	}
 
-	private void UpdatePlayers() 
+	void ClearLootMarkers()
 	{
-		if ( !GetPermissionsManager().HasPermission( "Admin.Map.Players" ) )
+		m_LootMarkerNames = null;
+		m_LootMarkerPositions = null;
+		UpdateMapMarkers();
+	}
+
+	protected void UpdateLootMarkers()
+	{
+		if (!m_LootMarkerNames || !m_LootMarkerPositions)
+			return;
+
+		if (m_LootMarkerNames.Count() != m_LootMarkerPositions.Count())
+			return;
+
+		for (int i = 0; i < m_LootMarkerNames.Count(); i++)
+		{
+			m_MapWidget.AddUserMark(m_LootMarkerPositions[i], m_LootMarkerNames[i], ARGB(255, 255, 165, 0), JM_COT_ICON_DOT + ".paa");
+		}
+	}
+
+	protected void UpdatePlayers() 
+	{
+		if ( !JMPermissions.Has( JMConstants.PERM_MAP_PLAYERS ) )
 			return;
 
 		array< JMPlayerInstance > players = GetPermissionsManager().GetPlayers();
@@ -98,7 +134,7 @@ class JMMapForm: JMFormBase
 		if ( w == m_MapWidget )
 		{
 			m_TeleportPosition = SnapToGround(m_MapWidget.ScreenToMap(Vector( x, y, 0 )));
-			CreateAdvancedPlayerConfirm("#STR_COT_TELEPORT_MODULE_TELEPORT_OFFLINE", "TeleportPlayerMulti", "TeleportPlayerSingle", "TeleportPlayerSelf", false);
+			ConfirmPlayerAction( "#STR_COT_TELEPORT_MODULE_TELEPORT_OFFLINE", this, "TeleportPlayerTargets", false );
 			
 			return true;
 		}
@@ -106,18 +142,77 @@ class JMMapForm: JMFormBase
 		return false;
 	}
 
-	void TeleportPlayerMulti(JMConfirmation confirmation = NULL)
+	void TeleportPlayerTargets( array<string> targets, JMConfirmation confirmation = NULL )
 	{
-		CF_Modules<JMTeleportModule>.Get().Position( m_TeleportPosition, JM_GetSelected().GetPlayers() );
+		CF_Modules<JMTeleportModule>.Get().Position( m_TeleportPosition, targets );
 	}
 
-	void TeleportPlayerSingle(JMConfirmation confirmation = NULL)
+#ifdef EXPANSIONMODNAVIGATION
+	protected void UpdateExpansionMarkers()
 	{
-		CF_Modules<JMTeleportModule>.Get().Position( m_TeleportPosition, {JM_GetSelected().GetPlayers()[0]} );
+		ExpansionMapSettings mapSettings = GetExpansionSettings().GetMap();
+		if ( !mapSettings || !mapSettings.ServerMarkers )
+			return;
+
+		for ( int i = 0; i < mapSettings.ServerMarkers.Count(); i++ )
+		{
+			ExpansionMarkerData marker = mapSettings.ServerMarkers[i];
+			if ( !marker )
+				continue;
+
+			string name = marker.GetName();
+			if ( name == "" )
+				name = "Marker";
+
+			m_MapWidget.AddUserMark( marker.GetPosition(), name, marker.GetColor(), JM_COT_ICON_DOT + ".paa" );
+		}
 	}
 
-	void TeleportPlayerSelf(JMConfirmation confirmation = NULL)
+	protected void UpdateExpansionSafezones()
 	{
-		CF_Modules<JMTeleportModule>.Get().Position( m_TeleportPosition, {GetPermissionsManager().GetClientPlayer().GetGUID()} );
+		ExpansionSafeZoneSettings szSettings = GetExpansionSettings().GetSafeZone();
+		if ( !szSettings || !szSettings.Enabled )
+			return;
+
+		int szColor = ARGB( 200, 50, 220, 50 );
+
+		// Circle zones
+		for ( int ci = 0; ci < szSettings.CircleZones.Count(); ci++ )
+		{
+			ExpansionSafeZoneCircle circleZone = szSettings.CircleZones[ci];
+			if ( !circleZone )
+				continue;
+			DrawMapCircle( circleZone.Center, circleZone.Radius, szColor );
+		}
+
+		// Cylinder zones (same footprint as circle on a 2D map)
+		for ( int cy = 0; cy < szSettings.CylinderZones.Count(); cy++ )
+		{
+			ExpansionSafeZoneCylinder cylinderZone = szSettings.CylinderZones[cy];
+			if ( !cylinderZone )
+				continue;
+			DrawMapCircle( cylinderZone.Center, cylinderZone.Radius, szColor );
+		}
 	}
+
+	// Approximates a circle on the map by placing dot markers around the perimeter.
+	protected void DrawMapCircle( vector center, float radius, int color )
+	{
+		int segments = 12;
+		float step = Math.PI2 / segments;
+
+		for ( int i = 0; i < segments; i++ )
+		{
+			float angle = step * i;
+			vector pt;
+			pt[0] = center[0] + radius * Math.Sin( angle );
+			pt[1] = center[1];
+			pt[2] = center[2] + radius * Math.Cos( angle );
+			m_MapWidget.AddUserMark( pt, "", color, JM_COT_ICON_DOT + ".paa" );
+		}
+
+		// Centre pin so the zone is identifiable when zoomed out.
+		m_MapWidget.AddUserMark( center, "Safe Zone", color, JM_COT_ICON_DOT + ".paa" );
+	}
+#endif
 }

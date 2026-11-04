@@ -1,41 +1,49 @@
 class JMCOTSideBar: COT_ScriptedWidgetEventHandler
 {
-	private Widget m_LayoutRoot;
-	private TextWidget m_TitleBarText;
+	//! Fraction of the sidebar height taken by the title bar. Must match the
+	//! `size 1 0.04` of TitleBar in sidebar_menu.layout - the module scroller is
+	//! sized to whatever is left between it and the footer.
+	protected static const float TITLEBAR_HEIGHT_FRAC = 0.04;
+	protected Widget m_LayoutRoot;
+	protected TextWidget m_TitleBarText;
+	protected ScrollWidget m_ButtonsScroller;
+	protected ref JMCOTSideBarFooter m_Footer;
 
-	private float m_WidthFull;
-	private float m_WidthIcon;
-	private float m_CurrentWidth;
-
-	private bool m_IsAnimatingIn;
-	private bool m_IsAnimatingOut;
-	
-	private bool m_IsTargetCompact;
-	private bool m_IsCompact;
-	private bool m_WasCompact;
-
-	private float m_TotalAnimateTime;
-	private float m_AnimateTime;
+	//! Last screen height the scroller was sized against, so the (comparatively
+	//! expensive) resize only runs when the resolution actually changes.
+	protected float m_LastScreenHeight;
+	protected Widget m_FooterWidget;
+	protected float m_WidthFull;
+	protected float m_WidthIcon;
+	protected float m_CurrentWidth;
+	protected bool m_IsAnimatingIn;
+	protected bool m_IsAnimatingOut;
+	protected bool m_IsTargetCompact;
+	protected bool m_IsCompact;
+	protected bool m_WasCompact;
+	protected float m_TotalAnimateTime;
+	protected float m_AnimateTime;
+	protected ref array< ref JMCOTSideBarCategory > m_Categories;
 
 	void JMCOTSideBar()
 	{
-		m_TotalAnimateTime = 0.35;
+		m_TotalAnimateTime = JMUIAnimations.SIDEBAR_ANIMATE_TIME;
+		m_Categories = new array< ref JMCOTSideBarCategory >;
+		m_Footer = new JMCOTSideBarFooter();
 	}
-	
+
 	void ~JMCOTSideBar()
 	{
 		if (!g_Game)
 			return;
 
-	#ifdef DIAG
+	#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_0(this);
 	#endif
 
 		Hide();
 
-	#ifdef DAYZ_1_28
 		DestroyWidget(m_LayoutRoot);
-	#endif
 	}
 
 	Widget GetLayoutRoot()
@@ -43,7 +51,47 @@ class JMCOTSideBar: COT_ScriptedWidgetEventHandler
 		return m_LayoutRoot;
 	}
 
-	bool IsVisible()
+	//! Where the bar is heading, not where it currently is. The root stays visible
+	//! for the whole slide-out, so IsVisible() answers "open" while the bar is on
+	//! its way off screen - and a re-open arriving in that window would be dropped.
+	bool IsShown()
+	{
+		if ( m_IsAnimatingOut )
+			return false;
+
+		if ( m_IsAnimatingIn )
+			return true;
+
+		return IsVisible();
+	}
+
+	// Returns true if w is the sidebar layout root, any child of it,
+	// or any child of a category flyout (which is a top-level workspace widget).
+	bool ContainsWidget( Widget w )
+	{
+		if ( !w )
+			return false;
+
+		// Walk up the widget's parent chain to find the sidebar root
+		Widget cur = w;
+		while ( cur )
+		{
+			if ( cur == m_LayoutRoot )
+				return true;
+			cur = cur.GetParent();
+		}
+
+		// Check all category flyouts (they are top-level, not parented to m_LayoutRoot)
+		foreach ( JMCOTSideBarCategory cat: m_Categories )
+		{
+			if ( cat.ContainsWidget( w ) )
+				return true;
+		}
+
+		return false;
+	}
+
+	override bool IsVisible()
 	{
 		return m_LayoutRoot && m_LayoutRoot.IsVisible();
 	}
@@ -53,38 +101,167 @@ class JMCOTSideBar: COT_ScriptedWidgetEventHandler
 		m_LayoutRoot = w;
 		m_LayoutRoot.SetHandler( this );
 
+		// The HUD is a workspace sibling, not a parent, so the only thing keeping
+		// it off the sidebar is draw order - see JMUILayout.SORT_SIDEBAR.
+		m_LayoutRoot.SetSort( JMUILayout.SORT_SIDEBAR );
+
 		Init();
 	}
-	
+
 	void Init()
 	{
-		Class.CastTo(m_TitleBarText, m_LayoutRoot.FindAnyWidget( "TitleBarText" ));
+		Class.CastTo( m_TitleBarText, m_LayoutRoot.FindAnyWidget( "TitleBarText" ) );
 
-		TextWidget.Cast( m_LayoutRoot.FindAnyWidget( "CreditsText" ) ).SetText("");
-		TextWidget.Cast( m_LayoutRoot.FindAnyWidget( "Version_Text" ) ).SetText("");
+		m_FooterWidget = m_LayoutRoot.FindAnyWidget( "Footer" );
+		m_Footer.Init( m_FooterWidget );
+
+		Class.CastTo( m_ButtonsScroller, m_LayoutRoot.FindAnyWidget( "Buttons_Scroller" ) );
+
+		Widget buttonsContainer = m_LayoutRoot.FindAnyWidget( "Buttons" );
 
 		array< JMRenderableModuleBase > modules = new array< JMRenderableModuleBase >;
 		SortModuleArray( GetModuleManager().GetCOTModules(), modules );
 
-		for ( int i = 0; i < modules.Count(); i++ )
-		{
-			JMRenderableModuleBase module = modules.Get( i );
+		// Group modules by category, preserving preferred order
+		array< string > categoryOrder = new array< string >;
+		JMSideBarConfig.GetCategoryOrder( categoryOrder );
 
-			if ( modules[i] && modules[i].HasButton() )
+		// Collect all unique categories not in preferred order
+		foreach ( JMRenderableModuleBase mod: modules )
+		{
+			if ( !mod.IsEnabled() )
+				continue;
+
+			if ( !mod.HasButton() )
+				continue;
+
+			string cat = mod.GetCategory();
+			bool found = false;
+			foreach ( string existing: categoryOrder )
 			{
-				modules[i].InitButton( g_Game.GetWorkspace().CreateWidgets( "JM/COT/GUI/layouts/sidebar_button.layout", m_LayoutRoot.FindAnyWidget( "Buttons" ) ) );
+				if ( existing == cat )
+				{
+					found = true;
+					break;
+				}
 			}
+			if ( !found )
+				categoryOrder.Insert( cat );
 		}
+
+		// Create one category tile per non-empty category
+		foreach ( string catName: categoryOrder )
+		{
+			// Check if any module belongs to this category
+			bool hasAny = false;
+			foreach ( JMRenderableModuleBase checkMod: modules )
+			{
+				if ( checkMod.IsEnabled() && checkMod.HasButton() && checkMod.GetCategory() == catName )
+				{
+					hasAny = true;
+					break;
+				}
+			}
+
+			if ( !hasAny )
+			{
+				continue;
+			}
+
+			// Create the category tile widget
+			Widget catWidget = g_Game.GetWorkspace().CreateWidgets( "JM/COT/GUI/layouts/sidebar_category.layout", buttonsContainer );
+			if ( !catWidget )
+				continue;
+
+			// Set the category label and icon
+			TextWidget catTtl = TextWidget.Cast( catWidget.FindAnyWidget( "cat_ttl" ) );
+			if ( catTtl )
+				catTtl.SetText( JMSideBarConfig.GetCategoryDisplayName( catName ) );
+
+			ImageWidget catIcon = ImageWidget.Cast( catWidget.FindAnyWidget( "cat_icon" ) );
+			if ( catIcon )
+				catIcon.LoadImageFile( 0, JMSideBarConfig.GetCategoryIcon( catName ) );
+
+			// Create the category manager (also creates the flyout as a top-level widget)
+			JMCOTSideBarCategory category = new JMCOTSideBarCategory();
+			category.SetSideBar( this );
+			category.Init( catName, catWidget );
+
+			// Add all modules in this category
+			foreach ( JMRenderableModuleBase mod2: modules )
+			{
+				if ( mod2.IsEnabled() && mod2.HasButton() && mod2.GetCategory() == catName )
+				{
+					category.AddModule( mod2 );
+				}
+			}
+
+			m_Categories.Insert( category );
+		}
+
+		UpdatePermissions();
 
 		float h;
 		m_LayoutRoot.GetSize( m_WidthFull, h );
 		m_WidthIcon = m_WidthFull * 0.8;
 
+		//! Everything above was measured at the current resolution, so only a
+		//! change from here on has to be handled.
+		JMUILayout.ResetResolutionWatch();
+
+		LayoutScroller();
+
 		Hide();
 		m_LayoutRoot.Show( false );
 	}
 
-	private void SortModuleArray( array< JMRenderableModuleBase > modules, out array< JMRenderableModuleBase > sorted )
+	// Size the module scroller to the gap between the title bar and the footer.
+	// Both of those are anchored to their own edge, so the scroller is the only
+	// widget that has to be told how tall it is - and it has to be told again
+	// whenever the resolution changes under it.
+	protected void LayoutScroller()
+	{
+		if ( !m_ButtonsScroller )
+			return;
+
+		float scrW, scrH;
+		g_Game.GetWorkspace().GetScreenSize( scrW, scrH );
+
+		if ( scrH == m_LastScreenHeight )
+			return;
+
+		m_LastScreenHeight = scrH;
+
+		float available = scrH - ( scrH * TITLEBAR_HEIGHT_FRAC ) - JMUILayout.Px( JMCOTSideBarFooter.HEIGHT );
+		if ( available < 0 )
+			available = 0;
+
+		m_ButtonsScroller.SetSize( 1.0, available );
+	}
+
+	void UpdatePermissions()
+	{
+		foreach ( JMCOTSideBarCategory cat: m_Categories )
+		{
+			if ( cat )
+			{
+				cat.UpdateModuleVisibility();
+			}
+		}
+	}
+
+	// Close every flyout except the one belonging to the given category.
+	// Called by a category when it opens its flyout, so siblings close instantly.
+	void CloseOtherFlyouts( JMCOTSideBarCategory except )
+	{
+		foreach ( JMCOTSideBarCategory cat: m_Categories )
+		{
+			if ( cat != except )
+				cat.ForceHideFlyout();
+		}
+	}
+
+	protected void SortModuleArray( array< JMRenderableModuleBase > modules, out array< JMRenderableModuleBase > sorted )
 	{
 		string pNames[ 1000 ];
 		int pIndices[ 1000 ];
@@ -120,72 +297,153 @@ class JMCOTSideBar: COT_ScriptedWidgetEventHandler
 
 	void Show()
 	{
+		#ifdef COT_DEBUGLOGS
+		Print("[COT_DBG] JMCOTSideBar.Show()");
+		#endif
+
+		// Reverse a slide that is still running rather than dropping the request.
+		// EaseIn at p and EaseOut at 1-p resolve to the same offset, so resuming
+		// the opposite animation from the mirrored time is seamless. Bailing out
+		// instead left m_IsOpen saying "open" while the bar finished sliding away.
+		float resume = 0.0;
 		if ( m_IsAnimatingOut )
-			return;
+			resume = m_TotalAnimateTime - m_AnimateTime;
 
 		SetFocus( NULL );
 
-		if ( !IsMissionClient() ) 
+		if ( !IsMissionClient() )
+		{
 			return;
+		}
 
 		if ( !m_LayoutRoot )
+		{
 			return;
-		
+		}
+
+		//! Re-asserted here because the HUD is torn down and rebuilt on respawn,
+		//! and the rebuilt one comes back at the default sort.
+		m_LayoutRoot.SetSort( JMUILayout.SORT_SIDEBAR );
+
+		UpdatePermissions();
+
 		ShowAllWidgets();
 
+		m_IsAnimatingOut = false;
 		m_IsAnimatingIn = true;
-		m_AnimateTime = 0.0;
+		m_AnimateTime = resume;
 	}
 
 	void Hide()
 	{
+		#ifdef COT_DEBUGLOGS
+		string cotDbgHideStack;
+		DumpStackString(cotDbgHideStack);
+		Print("[COT_DBG] JMCOTSideBar.Hide() call stack:\n" + cotDbgHideStack);
+		#endif
+
+		float resume = 0.0;
 		if ( m_IsAnimatingIn )
-			return;
+			resume = m_TotalAnimateTime - m_AnimateTime;
 
 		SetFocus( NULL );
 
-		if ( !IsMissionClient() ) 
+		if ( !IsMissionClient() )
 			return;
 
+		// Close any open category flyout before hiding
+		foreach ( JMCOTSideBarCategory hideCat: m_Categories )
+		{
+			hideCat.ForceHideFlyout();
+		}
+
+		m_IsAnimatingIn = false;
 		m_IsAnimatingOut = true;
-		m_AnimateTime = 0.0;
+		m_AnimateTime = resume;
 
 		HideAllWidgets();
 	}
 
 	void ShowAllWidgets()
 	{
-		#ifndef CF_WINDOWS
 		GetCOTWindowManager().ShowAllActive();
-		g_Game.GetInput().ChangeGameFocus( 1 );
+		g_Game.GetMission().AddActiveInputExcludes({"menu"});
 		g_Game.GetUIManager().ShowUICursor( true );
-		#endif
 	}
 
 	void HideAllWidgets()
 	{
 		m_WasCompact = m_IsCompact;
 
-		#ifndef CF_WINDOWS
 		GetCOTWindowManager().HideAllActive();
-		if ( !GetCOTWindowManager().HasAnyActive() )
+		if ( g_Game.GetMission() && !GetCOTWindowManager().HasAnyUnpinnedActive() )
 		{
-			g_Game.GetInput().ResetGameFocus();
+			g_Game.GetMission().RemoveActiveInputExcludes({"menu"});
 			g_Game.GetUIManager().ShowUICursor( false );
 		}
-		#endif
+	}
+
+	//! The game's resolution changed under an already built sidebar. Everything
+	//! that is derived fresh each frame (the module scroller, the footer text
+	//! rows, the flyout) follows on its own; what is cached is the bar's width,
+	//! its slide position, the footer strip's height and any open flyout.
+	protected void OnResolutionChanged( float ratio )
+	{
+		m_WidthFull = m_WidthFull * ratio;
+		m_WidthIcon = m_WidthFull * 0.8;
+		m_CurrentWidth = m_CurrentWidth * ratio;
+
+		float rootW, rootH;
+		m_LayoutRoot.GetSize( rootW, rootH );
+		m_LayoutRoot.SetSize( m_WidthFull, rootH );
+
+		//! Placed again by the slide when it is moving; a bar at rest has to be
+		//! put back where it belongs by hand.
+		m_LayoutRoot.SetPos( m_CurrentWidth, 0 );
+
+		if ( m_FooterWidget )
+			m_FooterWidget.SetSize( 1.0, JMUILayout.Px( JMCOTSideBarFooter.HEIGHT ) );
+
+		//! A flyout is placed in screen space from the tile it opened beside.
+		foreach ( JMCOTSideBarCategory cat: m_Categories )
+			cat.ForceHideFlyout();
+
+		GetCOTWindowManager().OnResolutionChanged( ratio );
 	}
 
 	void OnUpdate( float timeslice )
 	{
+		float resolutionRatio;
+		if ( JMUILayout.ConsumeResolutionChange( resolutionRatio ) )
+			OnResolutionChanged( resolutionRatio );
+
+		bool animating = m_IsAnimatingIn || m_IsAnimatingOut || (m_IsTargetCompact != m_IsCompact);
+
 		CheckForVisibleModules();
-		
-		if (m_IsAnimatingIn || m_IsAnimatingOut || (m_IsTargetCompact != m_IsCompact))
+
+		if ( IsVisible() )
+		{
+			LayoutScroller();
+			m_Footer.OnUpdate( timeslice );
+		}
+
+		// Update all categories (for flyout hide delay logic)
+		foreach ( JMCOTSideBarCategory cat: m_Categories )
+		{
+			cat.OnUpdate( timeslice );
+		}
+
+		if (animating)
 		{
 			if (m_AnimateTime == 0)
 			{
 				if (m_IsTargetCompact)
 					m_TitleBarText.SetText("HOD"); // HOD: branding
+
+				// Swap the footer at the START of the slide, not the end: the
+				// full strip is 300px wide and would be drawn clipped in half
+				// for the whole animation if it were left up until then.
+				m_Footer.SetCompact( m_IsTargetCompact );
 			}
 
 			m_AnimateTime += timeslice;
@@ -224,8 +482,15 @@ class JMCOTSideBar: COT_ScriptedWidgetEventHandler
 
 			m_LayoutRoot.SetPos( m_CurrentWidth, 0 );
 
+			// Keep any open flyout anchored to its category tile during animation
+			foreach ( JMCOTSideBarCategory animCat: m_Categories )
+			{
+				animCat.RepositionFlyout();
+			}
+
 			if ( m_AnimateTime > m_TotalAnimateTime )
 			{
+
 				if ( m_IsAnimatingOut )
 					m_LayoutRoot.Show( false );
 				else if (!m_IsTargetCompact)
@@ -253,34 +518,20 @@ class JMCOTSideBar: COT_ScriptedWidgetEventHandler
 
 	void CheckForVisibleModules()
 	{
+		string visibleTitle = "";
+
 		array< JMRenderableModuleBase > modules = GetModuleManager().GetCOTModules();
 		foreach(JMRenderableModuleBase module: modules)
 		{
 			if ( module.IsVisible() )
 			{
 				m_IsTargetCompact = true;
-				return;
+				visibleTitle = module.GetTitle();
+				break;
 			}
 		}
 
-		m_IsTargetCompact = false;
-	}
-
-	override bool OnClick( Widget w, int x, int y, int button )
-	{
-		if ( !IsMissionClient() ) 
-			return false;
-		
-		array< JMRenderableModuleBase > modules = GetModuleManager().GetCOTModules();
-		foreach(JMRenderableModuleBase module: modules)
-		{
-			if ( w == module.GetMenuButton() )
-			{
-				module.ToggleShow();
-				return false;
-			}
-		}
-
-		return false;
+		if (visibleTitle == "")
+			m_IsTargetCompact = false;
 	}
 }

@@ -7,6 +7,10 @@ enum JMClientRPC
 	UpdateClient,
 	UpdateClientPosition,
 	SetClient,
+	//! Appended: one array send for the whole roster instead of the old
+	//! per-player unicast loop in RPC_RefreshClients / RPC_RefreshClientPositions.
+	UpdateClientBatch,
+	UpdateClientPositionBatch,
 	COUNT
 }
 
@@ -51,7 +55,9 @@ enum JMCameraModuleRPC
 
 enum JMVehiclesModuleRPC
 {
-	INVALID = 10180,
+	//! Was 10180: its 20 ids ran into JMItemSetSpawnerModuleRPC (10200). Ranges are
+	//! checked by Workbench/Batchfiles/CheckRPCRanges.ps1.
+	INVALID = 10650,
 	RequestServerVehicles,
 	SendServerVehicles,
 	DeleteVehicle,
@@ -59,6 +65,21 @@ enum JMVehiclesModuleRPC
 	DeleteVehicleUnclaimed,
 	DeleteVehicleDestroyed,
 	TeleportToVehicle,
+	TeleportVehicleToMe,
+	RepairVehicle,
+	RefuelVehicle,
+	UnstuckVehicle,
+	CoverVehicle,
+	LockVehicle,
+	UnPairVehicle,
+	// Appended after 1.x - delta-refresh slots. Old clients never see these.
+	SendVehicleUpsert,
+	SendVehicleRemove,
+	RequestVehicleUpsert,
+	//! Undo: the only vehicle teleport that names its own destination.
+	TeleportVehicleTo,
+	ClearVehicleCargo,
+	SpawnVehicleKey,
 	COUNT
 }
 
@@ -89,6 +110,7 @@ enum JMTeleportModuleRPC
 	Location,
 	AddLocation,
 	RemoveLocation,
+	EditLocation,
 	COUNT
 }
 
@@ -102,7 +124,8 @@ enum JMVehicleSpawnerModuleRPC
 
 enum JMWeatherModuleRPC
 {
-	INVALID = 10280,
+	//! Was 10280: SpecialWeatherStatus landed on 10301 == JMESPModuleRPC.Log.
+	INVALID = 10600,
 	Load,
 	Storm,
 	Fog,
@@ -121,7 +144,12 @@ enum JMWeatherModuleRPC
 	UpdatePreset,
 	RemovePreset,
 	FreezeTime,
-	SetWeatherBehavior,  //! @note AT MAX! Need to increase JMESPModuleRPC enum starting entry if adding any new entry to JMWeatherModuleRPC
+	SetWeatherBehavior,
+	DynamicWeather,
+	Sandstorm,
+	SpecialWeatherStatus,
+	DynamicControl,
+	DynamicStatus,
 	COUNT
 }
 
@@ -147,22 +175,145 @@ enum JMESPModuleRPC
 	DuplicateAll,
 	DeleteAll,
 	MoveToCursor,
-	
+
+	ObjectAction,
+	ObjectActionResult,
+
+	//! Appended, never inserted - these are wire values. It belongs with the
+	//! other BaseBuilding_ entries by meaning, but slotting it there would
+	//! renumber every id below it and silently mismatch an older client.
+	BaseBuilding_SetPartHealth,
+
+	//! Sent once per move/rotate gesture (not per throttled position/
+	//! orientation update) so the server can push one JMActionHistory entry
+	//! for the whole drag. See JMESPWidgetHandler.EndDrag.
+	RecordTransformHistory,
+
+	//! Weapon attachment add/remove/swap by classname - not routed through
+	//! ObjectAction because that channel's wire format is (int, float) only
+	//! and has no string slot for a classname.
+	SetAttachment,
+	RemoveAttachment,
+
+	COUNT
+}
+
+//! Everything the ESP object panel can do to a target that is not worth its
+//! own RPC. One channel with an action id keeps RPC.c from growing a line per
+//! button, and every one of them still carries its own permission check on the
+//! server - see JMESPModule.PermissionForAction.
+enum JMESPObjectAction
+{
+	INVALID = 0,
+
+	SetQuantity,
+	SetLiquid,
+	SetCleanness,
+	SetFoodStage,
+	SetOpen,
+
+	SetLock,
+	SetCode,
+	GetCode,
+
+	//! Appended, never inserted: these are wire values, and renumbering an
+	//! existing entry silently mismatches a client on an older build.
+
+	//! Weapons. ivalue is the on/off for the two toggles; LoadMagazine takes
+	//! none and works the type out from the weapon's own config.
+	SetJammed,
+	SetChambered,
+	LoadMagazine,
+
+	//! Fireplaces. SetStoneCircle and SetOven are the two build-quality
+	//! upgrades a fireplace can carry; CookAll finishes everything on it.
+	SetBurning,
+	FireplaceRefuel,
+	SetStoneCircle,
+	SetOven,
+	CookAll,
+
+	//! Every combination lock within reach of the target, not just its own -
+	//! a base is a dozen separate entities and locking them one at a time is
+	//! a dozen right-clicks.
+	SetLockAll,
+
+	SetLockWheels,
+	RefillCoolant,
+	RepairAndFillSlots,
+	SetGrenadePin,
+	TriggerTrap,
+	SetFenceOpen,
+	SetTentOpen,
+	SetCarDoors,
+
+	//! Vehicle fluids as a fraction of their own capacity - fvalue is 0..1.
+	//! RefillCoolant above is the same thing pinned at 1, kept because it is a
+	//! wire value an older client may still send.
+	SetFuel,
+	SetCoolant,
+
+	//! A weapon that takes no detachable magazine loads into the gun itself.
+	FillInternalMagazine,
+
+	//! Every construction part of one object at once, in dependency order.
+	BuildAll,
+	DismantleAll,
+
+	//! Every already-built construction part of one object, healed to full.
+	RepairAll,
+
+	//! A flag pole's mast, fvalue 0..1 raised, refresher timer moved with it.
+	SetFlagRaised,
+
+	//! Delete everything sitting in an object's cargo, the object kept.
+	ClearCargo,
+
+	//! Pin a creature's AI: kept in idle, with its input controller held still.
+	SetImmobilized,
+
+	//! Arm or disarm a trap without anything stepping on it.
+	SetTrapArmed,
+
+	//! Swap the target's classname, and any already-attached child's, for the
+	//! sibling variant carrying a different color token - ivalue indexes into
+	//! JMObjectSpawnerModule.GetColorTokens().
+	ChangeColor,
+
+	//! A static map building's door - ivalue is open/close or lock/unlock (per
+	//! action), fvalue carries the Building door index picked by the raycast,
+	//! since there is no per-door target to route through separately.
+	SetHouseDoorOpen,
+	SetHouseDoorLocked,
+
+	SetDigitalLock,  //! OBSOLETE - DO NOT USE - Use SetLock instead
+	GetDigitalCode,  //! OBSOLETE - DO NOT USE - Use GetCode instead
+	ResetDigitalCode,  //! OBSOLETE - DO NOT USE - Use ResetCode instead
+
+	ResetCode,
+
+	COUNT
+}
+
+enum JMStatType
+{
+	Health = 0,
+	Blood,
+	Shock,
+	Energy,
+	Water,
+	Stamina,
+	HeatBuffer,
 	COUNT
 }
 
 enum JMPlayerModuleRPC
 {
-	INVALID = 10320,
+	//! Was 10320, which collided with JMESPModuleRPC (10300, 23 entries) once its
+	//! SetAttachment/RemoveAttachment were appended. Bumped; stays under 10400.
+	INVALID = 10340,
 
-	// Player Vitals
-	SetHealth,
-	SetBlood,
-	SetShock,
-	SetEnergy,
-	SetWater,
-	SetStamina,
-	SetHeatBuffer,
+	SetStat,
 
 	SetBloodyHands,
 	RepairTransport,
@@ -185,7 +336,8 @@ enum JMPlayerModuleRPC
 	Heal,
 	Strip,
 	ClearCargo,
-	Dry,
+	Dry,  //! Obsolete, use SetItemWetness
+	SetItemWetness,
 	Kick,
 	KickMessage,
 	Ban,
@@ -199,6 +351,51 @@ enum JMPlayerModuleRPC
 	SetRoles,
 	VONStartedTransmitting,
 	VONStoppedTransmitting,
+	AddDisease,
+	RemoveDisease,
+	RemoveAllDiseases,
+	SendDiseaseMask,
+	AddBleedingPart,
+	StopBleedingPart,
+	SendBleedingState,
+	//! Appended, never inserted: these are wire values, and renumbering an
+	//! existing entry silently mismatches a client on an older build.
+	RequestInventory,
+	InventoryDelete,
+	InventoryRepair,
+	InventoryTake,
+	RequestPlayerStats,
+	InventoryModify,
+	InventoryGroupOp,
+	RequestExpansionInfo,
+	SetRagdoll,
+	ActivateModifier,
+	DeactivateModifier,
+	COUNT
+}
+
+//! Which edit an InventoryModify request asks for. One RPC covers all: they share
+//! item addressing, permission and refreshed-listing reply, differing only in value.
+//! Wire values - append only.
+enum JMInventoryModifyOp
+{
+	UNJAM = 0,
+	QUANTITY,      //!< ammo count for magazines, quantity for everything else
+	TEMPERATURE,
+	FOOD_STAGE,    //!< FoodStageType
+	LIQUID_TYPE,   //!< LIQUID_*
+	HEALTH,        //!< 0..100
+	COUNT
+}
+
+//! What an InventoryGroupOp asks for. The addressed item is the CONTAINER; the op
+//! applies to its cargo and attachments, never the container itself.
+//! Wire values - append only.
+enum JMInventoryGroupOp
+{
+	TAKE_ALL = 0,
+	REPAIR_ALL,
+	DELETE_ALL,
 	COUNT
 }
 
@@ -225,6 +422,7 @@ enum JMWebhookCOTModuleRPC
 	Load,
 	AddConnectionGroup,
 	RemoveConnectionGroup,
+	EditConnectionGroup,
 	AddType,
 	RemoveType,
 	TypeState,
@@ -243,3 +441,157 @@ enum JMLoadoutModuleRPC
 	COUNT
 }
 
+enum JMCompensationsModuleRPC
+{
+	INVALID = 10480,
+	Load,
+	SpawnCursor,
+	SpawnTarget,
+	SpawnPlayers,
+	Delete,
+	COUNT
+}
+
+enum JMRoleManagerModuleRPC
+{
+	INVALID = 10500,
+
+	// Client -> Server
+	RequestRoleList,
+	CreateRole,
+	DeleteRole,
+	SetRolePermissions,
+
+	// Server -> Client
+	RoleList,
+
+	COUNT
+}
+
+enum JMLootAnalysisModuleRPC
+{
+	INVALID = 10520,
+
+	// Client -> Server
+	RequestItemScan,
+	RequestLootDistribution,
+	DeleteAllItems,
+
+	// Server -> Client
+	SendItemScanResults,
+	SendLootDistribution,
+
+	COUNT
+}
+
+// Generic JMEntityManagerModule RPCs, same slots per manager: Request (c->s),
+// Send (s->c), Action (c->s, action id on entity). SendUpsert/SendRemove (delta
+// refresh, s->c) MUST stay at the end so pre-delta clients match the first four.
+
+enum JMEventsModuleRPC
+{
+	INVALID = 10540,
+	Request,
+	Send,
+	Action,
+	SendUpsert,
+	SendRemove,
+	COUNT
+}
+
+enum JMTerritoryModuleRPC
+{
+	INVALID = 10560,
+	RequestTerritories,
+	SendTerritories,
+	SetLevel,
+	COUNT
+}
+
+
+enum JMBanModuleRPC
+{
+    INVALID = 10800,
+
+    // Client -> Server
+    RequestBanList,
+    RequestBan,
+    UnbanPlayer,
+    EditBanDuration,
+
+    // Server -> Client
+    BanList,
+
+    COUNT
+}
+
+
+// Map editor - 3D place / scale / move / delete of world objects.
+// Stored objects survive mission restart (per-mission JSON on the server).
+// RPCs are deliberately coarse: one RPC per mutation, GUID-list batched on read.
+enum JMMapEditorModuleRPC
+{
+	INVALID = 10900,
+
+	// Client -> Server
+	RequestList,
+	SpawnObject,
+	TransformObject,
+	DeleteObject,
+	ClearAll,
+	BulkTransform,
+	BulkDelete,
+	CloneObject,
+	Undo,
+	Redo,
+
+	// Server -> Client
+	List,
+	//! RESERVED, not implemented: would push undo/redo depth to the client. Never
+	//! sent, deliberately no OnRPC case -- rpc_check flags this, see
+	//! ai/tools/README.md.
+	UndoState,
+
+	COUNT
+}
+
+// Anti-cheat detection module - server-side only, periodic poll.
+// Server fires webhooks; admin UI reads flag state via dedicated RPCs.
+enum JMAntiCheatModuleRPC
+{
+	INVALID = 10920,
+
+	// Client -> Server
+	RequestFlags,
+	ClearFlag,
+
+	// Server -> Client
+	Flags,
+
+	COUNT
+}
+
+
+// Shared undo/redo stack trigger. Both are parameterless client -> server
+// requests; the server replies through the notification system, not an RPC.
+// (Were JMESPModuleRPC.UndoLastAction / RedoLastAction until the stack got a
+// module of its own - see JMActionHistoryModule.)
+enum JMActionHistoryModuleRPC
+{
+	INVALID = 10960,
+	Undo,
+	Redo,
+	COUNT
+}
+
+// Server performance broadcast - sampled on the server, pushed to admin
+// clients on a timer. No client -> server direction: nothing is requested.
+enum JMServerStatsModuleRPC
+{
+	INVALID = 10940,
+
+	// Server -> Client
+	Stats,
+
+	COUNT
+}

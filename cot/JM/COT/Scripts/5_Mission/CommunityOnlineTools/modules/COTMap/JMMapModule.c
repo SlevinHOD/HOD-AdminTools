@@ -1,55 +1,51 @@
 class JMMapModule: JMRenderableModuleBase
 {
 	protected ref array< Man > m_ServerPlayers;
-	
-	void JMMapModule() 
+
+	void JMMapModule()
 	{
 		m_ServerPlayers = new array< Man >;
 
-		GetPermissionsManager().RegisterPermission( "Admin.Map" );
+	}
 
-		GetPermissionsManager().RegisterPermission( "Admin.Map.View" );
-		GetPermissionsManager().RegisterPermission( "Admin.Map.Players" );
+	void SetLootMarkers(array<string> names, array<vector> positions)
+	{
+		JMMapForm form;
+		if (Class.CastTo(form, GetForm()))
+		{
+			form.SetLootMarkers(names, positions);
+		}
+	}
 
-		GetPermissionsManager().RegisterPermission( "Admin.Player.Teleport.Position" );
+	override void DescribeModule( JMModuleInfo info )
+	{
+		super.DescribeModule( info );
+
+		info.Title = "#STR_COT_MAP_MODULE_NAME";
+		info.Icon = "map";
+		info.Layout = "JM/COT/GUI/layouts/mapview_form.layout";
+		info.Category = JMSideBarConfig.CATEGORY_WORLD;
+		info.ViewPermission = JMConstants.PERM_MAP_VIEW;
+		info.InputToggle = "UACOTToggleMap";
+		// Temporarily hidden from the sidebar.
+		info.HasButton = false;
+
+		//! Called on both client and server as the module registers, before the mission loads.
+		info.AddPermission( JMConstants.PERM_MAP );
+		info.AddPermission( JMConstants.PERM_MAP_PLAYERS );
+		info.AddPermission( JMConstants.PERM_PLAYER_TELEPORT_POSITION );
 	}
 
 	override void EnableUpdate()
 	{
 	}
 
-	override bool HasAccess()
+	void ClearLootMarkers()
 	{
-		return GetPermissionsManager().HasPermission( "Admin.Map.View" );
-	}
-
-	override string GetInputToggle()
-	{
-		return "UACOTToggleMap";
-	}
-	
-	override string GetLayoutRoot()
-	{
-		return "JM/COT/GUI/layouts/mapview_form.layout";
-	}
-
-	override string GetTitle()
-	{
-		return "#STR_COT_MAP_MODULE_NAME";
-	}
-	
-	override string GetIconName()
-	{
-		return "JM\\COT\\GUI\\textures\\modules\\COTMap.paa";
-	}
-
-	override bool ImageIsIcon()
-	{
-		return true;
-	}
-
-	override bool ImageHasPath()
-	{
-		return true;
+		JMMapForm form;
+		if (Class.CastTo(form, GetForm()))
+		{
+			form.ClearLootMarkers();
+		}
 	}
 }

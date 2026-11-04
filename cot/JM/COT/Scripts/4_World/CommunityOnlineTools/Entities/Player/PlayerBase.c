@@ -7,50 +7,53 @@ enum JMInvisibilityType
 
 modded class PlayerBase
 {
-#ifndef CF_MODULE_PERMISSIONS
-	private JMPlayerInstance m_AuthenticatedPlayer;
-#endif
+	protected JMPlayerInstance m_AuthenticatedPlayer;
 
-	private bool m_COT_GodMode;
-	private bool m_COT_GodMode_Preference;
-
-	private int m_JMIsInvisible;
-	private int m_JMIsInvisibleRemoteSynch;
-	private int m_COT_Invisibility_Preference;
+	protected bool m_COT_GodMode;
+	protected bool m_COT_GodMode_Preference;
+	protected int m_JMIsInvisible;
+	protected int m_JMIsInvisibleRemoteSynch;
+	protected int m_COT_Invisibility_Preference;
 	protected ref Timer m_COT_InvisibilityUpdateTimer;
-	private bool m_COT_WasSpeaking;
-
-	private bool m_JMIsFrozen;
-	private bool m_JMIsFrozenRemoteSynch;
-
-	private vector m_JMLastPosition;
-	private bool m_JMHasLastPosition;
-
-	private bool m_JMHasUnlimitedAmmo;
-	private bool m_JMHasUnlimitedStamina;
-	
-	private bool m_JMHasCustomScale;
-	private float m_JMScaleValue;
-
-	private bool m_JMHasAdminNVG;
-	private bool m_JMHasAdminNVGRemoteSynch;
-
-	private ref map<int, bool> m_COT_PlayerVars;
-	private int m_COT_PlayerVarsBitmask;
-
-	PlayerBase m_JM_SpectatedPlayer;  //! Obsolete, unused, kept for compat with 3rd party mods
+	protected bool m_COT_WasSpeaking;
+	protected bool m_JMIsFrozen;
+	protected bool m_JMIsFrozenRemoteSynch;
+	protected bool m_JMIsRagdoll;
+	protected bool m_JMIsRagdollRemoteSynch;
+	protected vector m_JMLastPosition;
+	protected bool m_JMHasLastPosition;
+	protected bool m_JMHasUnlimitedAmmo;
+	protected bool m_JMHasUnlimitedStamina;
+	protected bool m_JMHasCustomScale;
+	protected float m_JMScaleValue;
+	protected bool m_JMHasAdminNVG;
+	protected bool m_JMHasAdminNVGRemoteSynch;
+	protected ref map<int, bool> m_COT_PlayerVars;
+	protected int m_COT_PlayerVarsBitmask;
 	Object m_JM_SpectatedObject;
+	ref set<PlayerBase> m_JM_Spectators;
 	vector m_JM_CameraPosition;
-	private bool m_COT_EdgeTick;
+	protected bool m_COT_EdgeTick;
+	protected bool m_COT_ReceiveDamageDealt;
+	protected bool m_COT_CannotBeTargetedByAI;
+	protected bool m_COT_CannotBeTargetedByAI_Preference;
+	protected bool m_COT_RemoveCollision;
+	protected bool m_COT_RemoveCollision_Preference;
+	protected bool m_COT_IsBeingKicked;
+	protected bool m_COT_IsLeavingFreeCam;
+	protected bool m_COT_TempDisableOnSelectPlayer;
 
-	private bool m_COT_ReceiveDamageDealt;
-	private bool m_COT_CannotBeTargetedByAI;
-	private bool m_COT_CannotBeTargetedByAI_Preference;
-	private bool m_COT_RemoveCollision;
-	private bool m_COT_RemoveCollision_Preference;
+	//  COT kill-tracking hooks: EEHitBy records body-part and approximate hit/miss (real player vs
+	//  world); EEKilled records killer, body-part and distance. Static methods on JMAntiCheatKillHook
+	//  forward both to the anti-cheat module, avoiding a cross-file class reference that the
+	//  Mission module's compile scope has to keep clean.
 
-	private bool m_COT_IsBeingKicked;
-	private bool m_COT_IsLeavingFreeCam;
+	//! State of the last hit this player took, captured while it is still
+	//! accurate. EEKilled can fire minutes later (bleed-out, shock) by which
+	//! time the weapon is holstered, the explosive deleted, and both players
+	//! moved -- so a distance computed there is meaningless.
+	protected ref JMAntiCheatKillEvent m_COT_LastHitSnapshot;
+	protected int m_COT_LastHitTime;
 
 	//private Transport m_COT_TransportCache;
 	//private int m_COT_TransportCache_CrewIndex;
@@ -64,13 +67,67 @@ modded class PlayerBase
 		m_COT_PlayerVars = new map<int, bool>;
 	}
 
-	
 	void ~PlayerBase()
 	{
 		if (g_Game && g_Game.IsClient())
 		{
 			ClearEventMask(EntityEvent.POSTFRAME|EntityEvent.INIT);
 		}
+	}
+
+	vector GetLastPosition()
+	{
+		return m_JMLastPosition;
+	}
+
+	bool HasLastPosition()
+	{
+		return m_JMHasLastPosition;
+	}
+
+	void SetLastPosition(bool force = false)
+	{
+		if ( g_Game.IsServer() && (force || (!m_JM_SpectatedObject && m_JM_CameraPosition == vector.Zero)))
+		{
+			vector trans[4];
+			GetTransform( trans );
+			m_JMLastPosition = trans[3];
+
+			m_JMHasLastPosition = true;
+		}
+	}
+
+	void SetWorldPosition(vector position)
+	{
+		Object parent;
+		if (Class.CastTo(parent, GetParent()))
+		{
+			Transport transport;
+			if (Class.CastTo(transport, parent))
+			{
+				if (transport.CrewMemberIndex(this) != -1)
+				{
+					COT_Base.PlaceOnSurfaceAtPosition(transport, position);
+					
+					return;
+				}
+			}
+
+			SetPosition(parent.WorldToModel(position));
+		}
+		else
+		{
+			SetPosition(position);
+		}
+
+		if (m_JM_CameraPosition != vector.Zero || m_JM_SpectatedObject)
+			SetLastPosition(true);
+
+		//! Every path into here is somebody being moved rather than moving:
+		//! an admin teleport, a spectate exit, a vehicle unstuck. Tell the
+		//! anti-cheat so the next position sample is discarded instead of
+		//! being read as a several-kilometre jump.
+		COT_GrantMove();
 	}
 
 	override void Init()
@@ -101,9 +158,7 @@ modded class PlayerBase
 
 		RegisterNetSyncVariableFloat("m_JMScaleValue", 0.1, 10.0);
 
-#ifndef CF_MODULE_PERMISSIONS
 		g_Game.GetCallQueue( CALL_CATEGORY_SYSTEM ).CallLater( Safe_SetAuthenticatedPlayer, 2000, false );
-#endif
 
 		m_JMHasLastPosition = false;
 		m_JMLastPosition = "0 0 0";
@@ -124,6 +179,24 @@ modded class PlayerBase
 		playerVars[JMPlayerVariables.ADMIN_NVG] = COTHasAdminNVG();
 		playerVars[JMPlayerVariables.HAS_CUSTOM_SCALE] = COTHasCustomScale();
 		playerVars[JMPlayerVariables.INVISIBILITY_INTERACTIVE] = COTIsInvisible(JMInvisibilityType.Interactive);
+		playerVars[JMPlayerVariables.UNCONSCIOUS] = IsUnconscious();
+		playerVars[JMPlayerVariables.RAGDOLL] = COTIsRagdoll();
+
+		bool isSick = HasDisease();
+
+	#ifndef DAYZ_1_29
+		//! 1.30+
+		//! Deal with modifiers that do not call IncreaseDiseaseCount (might be a DayZ bug)
+		if ( !isSick && GetModifiersManager() )
+		{
+			isSick |= GetModifiersManager().IsModifierActive( eModifiers.MDF_PARTICLES_BREATH ) || GetModifiersManager().IsModifierActive( eModifiers.MDF_PARTICLES_EYES );
+			isSick |= GetModifiersManager().IsModifierActive( eModifiers.MDF_SANDSTORM_EXPOSURE_STATIC ) || GetModifiersManager().IsModifierActive( eModifiers.MDF_SANDSTORM_EXPOSURE_DYNAMIC );
+		}
+	#endif
+
+		playerVars[JMPlayerVariables.SICK] = isSick;
+		playerVars[JMPlayerVariables.BLEEDING] = IsBleeding();
+		playerVars[JMPlayerVariables.DEAD] = !IsAlive();
 	}
 
 	void COT_SynchPlayerVars()
@@ -163,16 +236,25 @@ modded class PlayerBase
 		}
 		else
 		{
-			//! Only handle inventory
+			//! Only select few things get updated if skipping vanilla commandhandler
+			//! (same order as vanilla)
 
 			GetDayZPlayerInventory().HandleInventory(pDt);
 			GetHumanInventory().Update(pDt);
 
+			if (m_JM_SpectatedObject && m_JM_SpectatedObject.IsInherited(PlayerBase))
+			{
+				//! We want the spectated player's stance and stamina, so since we skip the vanilla commandhandler,
+				//! we need to explicitly update them
+				if (m_StanceIndicator)
+					m_StanceIndicator.Update();
+				if (m_StaminaHandler)
+					m_StaminaHandler.Update(pDt, pCurrentCommandID);
+			}
+
 			UpdateDelete();
 		}
 	}
-
-	protected bool m_COT_TempDisableOnSelectPlayer;
 
 	void COT_TempDisableOnSelectPlayer(bool disable = true)
 	{
@@ -187,12 +269,12 @@ modded class PlayerBase
 
 	override void OnSelectPlayer()
 	{
-	#ifdef DIAG
+	#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_0(this);
-		PrintFormat("Is player selected? %1", m_PlayerSelected.ToString());
 	#endif
 
 	#ifdef DIAG
+		PrintFormat("Is player selected? %1", m_PlayerSelected.ToString());
 		PrintFormat("Is OnSelectPlayer temporarily disabled? %1", m_COT_TempDisableOnSelectPlayer.ToString());
 	#endif
 
@@ -232,7 +314,7 @@ modded class PlayerBase
 			switch (value)
 			{
 				case JMPlayerVariables.GODMODE:
-				#ifdef DIAG_DEVELOPER
+				#ifdef DIAG
 					if (m_COT_GodMode != enabled)
 						PrintFormat("%1 COT GodMode %2", this, enabled);
 				#endif
@@ -256,7 +338,7 @@ modded class PlayerBase
 					break;
 
 				case JMPlayerVariables.UNLIMITED_AMMO:
-				#ifdef DIAG_DEVELOPER
+				#ifdef DIAG
 					if (m_JMHasUnlimitedAmmo != enabled)
 						PrintFormat("%1 COT Unlimited Ammo %2", this, enabled);
 				#endif
@@ -264,7 +346,7 @@ modded class PlayerBase
 					break;
 
 				case JMPlayerVariables.UNLIMITED_STAMINA:
-				#ifdef DIAG_DEVELOPER
+				#ifdef DIAG
 					if (m_JMHasUnlimitedStamina != enabled)
 						PrintFormat("%1 COT Unlimited Stamina %2", this, enabled);
 				#endif
@@ -276,11 +358,15 @@ modded class PlayerBase
 					break;
 
 				case JMPlayerVariables.HAS_CUSTOM_SCALE:
-				#ifdef DIAG_DEVELOPER
+				#ifdef DIAG
 					if (m_JMHasCustomScale != enabled)
 						PrintFormat("%1 COT Custom Scale %2", this, enabled);
 				#endif
 					m_JMHasCustomScale = enabled;
+					break;
+
+				case JMPlayerVariables.RAGDOLL:
+					m_JMIsRagdollRemoteSynch = enabled;
 					break;
 			}
 		}
@@ -295,7 +381,7 @@ modded class PlayerBase
 
 		if ( m_JMIsInvisibleRemoteSynch != m_JMIsInvisible )
 		{
-		#ifdef DIAG_DEVELOPER
+		#ifdef DIAG
 			PrintFormat("%1 COT Invisibility %2", this, m_JMIsInvisibleRemoteSynch);
 		#endif
 
@@ -316,7 +402,7 @@ modded class PlayerBase
 
 		if ( m_JMIsFrozenRemoteSynch != m_JMIsFrozen )
 		{
-		#ifdef DIAG_DEVELOPER
+		#ifdef DIAG
 			PrintFormat("%1 COT Frozen %2", this, m_JMIsFrozenRemoteSynch);
 		#endif
 
@@ -332,7 +418,7 @@ modded class PlayerBase
 
 		if ( m_JMHasAdminNVGRemoteSynch != m_JMHasAdminNVG )
 		{
-		#ifdef DIAG_DEVELOPER
+		#ifdef DIAG
 			PrintFormat("%1 COT Admin NVG %2", this, m_JMHasAdminNVGRemoteSynch);
 		#endif
 
@@ -353,6 +439,18 @@ modded class PlayerBase
 				g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(RemoveActiveNV, 1000, false, JMNVTypes.NV_COT_OFF);
 			}
 		}
+
+	#ifndef DAYZ_1_29
+		//! COTSetRagdoll() only runs PhysicsSetRagdoll() on the server. Other clients get it via
+		//! replication, but the OWNING client simulates locally and never got told, so it needs
+		//! its own client-side apply (like Frozen/AdminNVG above).
+		if ( m_JMIsRagdollRemoteSynch != m_JMIsRagdoll )
+		{
+			m_JMIsRagdoll = m_JMIsRagdollRemoteSynch;
+
+			PhysicsSetRagdoll( m_JMIsRagdoll );
+		}
+	#endif
 	}
 
 	//! @note only way to prevent drawing occluding effects when admin NV is enabled and wearing NVGoggles that are NOT active at the same time
@@ -477,7 +575,7 @@ modded class PlayerBase
 				//! If this instance of a character *is* controlled by the client player (ie. *not* a remote player),
 				//! pretend restrained if COT is *not* active _or_ the client player *doesn't* have AccessInventory permission
 				//! (thus preventing access for this character to their own inventory)
-				if (!GetCommunityOnlineToolsBase().IsActive() || !GetPermissionsManager().HasPermission("Admin.Player.AccessInventory"))
+				if (!GetCommunityOnlineToolsBase().IsActive() || !JMPermissions.Has(JMConstants.PERM_PLAYER_ACCESSINVENTORY))
 					return true;
 			}
 			else
@@ -485,7 +583,7 @@ modded class PlayerBase
 				//! If this instance of a character is *not* controlled by the client player (ie. a remote player),
 				//! pretend restrained if COT *is* active _and_ the client player *does* have AccessInventory permission
 				//! (thus allowing access to this character's inventory for an admin with appropriate permissions)
-				if (GetCommunityOnlineToolsBase().IsActive() && GetPermissionsManager().HasPermission("Admin.Player.AccessInventory"))
+				if (GetCommunityOnlineToolsBase().IsActive() && JMPermissions.Has(JMConstants.PERM_PLAYER_ACCESSINVENTORY))
 					return true;
 			}
 		}
@@ -508,56 +606,29 @@ modded class PlayerBase
 		return true;
 	}
 
-	bool HasLastPosition()
+	//! Excuse the next movement samples for this player. Safe from any side; anti-cheat acts
+	//! server-side only. Covers any mod teleporting via PlayerBase.SetWorldPosition; mods
+	//! using raw SetPosition or a sync juncture should call COT_GrantAction themselves.
+	void COT_GrantMove()
 	{
-		return m_JMHasLastPosition;
+		COT_GrantAction(JMAntiCheatSanction.MOVEMENT, JMAntiCheatSanction.MoveGraceSeconds);
 	}
 
-	vector GetLastPosition()
+	//! Declare that the server is about to do something an anti-cheat rule would read as a
+	//! cheat. Call it BEFORE acting; a scripted action is told apart from a cheat by whether
+	//! our code announced it. See JMAntiCheatSanction for the buckets.
+	void COT_GrantAction(string bucket, float seconds)
 	{
-		return m_JMLastPosition;
+		if (!g_Game || !g_Game.IsServer())
+			return;
+
+		PlayerIdentity identity = GetIdentity();
+		if (!identity)
+			return;
+
+		JMAntiCheatSanction.Grant(identity.GetId(), bucket, seconds);
 	}
 
-	void SetLastPosition(bool force = false)
-	{
-		if ( g_Game.IsServer() && (force || (!m_JM_SpectatedObject && m_JM_CameraPosition == vector.Zero)))
-		{
-			vector trans[4];
-			GetTransform( trans );
-			m_JMLastPosition = trans[3];
-
-			m_JMHasLastPosition = true;
-		}
-	}
-
-	void SetWorldPosition(vector position)
-	{
-		Object parent;
-		if (Class.CastTo(parent, GetParent()))
-		{
-			Transport transport;
-			if (Class.CastTo(transport, parent))
-			{
-				if (transport.CrewMemberIndex(this) != -1)
-				{
-					CommunityOnlineToolsBase.PlaceOnSurfaceAtPosition(transport, position);
-					
-					return;
-				}
-			}
-
-			SetPosition(parent.WorldToModel(position));
-		}
-		else
-		{
-			SetPosition(position);
-		}
-
-		if (m_JM_CameraPosition != vector.Zero || m_JM_SpectatedObject)
-			SetLastPosition(true);
-	}
-
-#ifndef CF_MODULE_PERMISSIONS
 	JMPlayerInstance GetAuthenticatedPlayer()
 	{
 		if ( m_AuthenticatedPlayer )
@@ -576,15 +647,12 @@ modded class PlayerBase
 				m_AuthenticatedPlayer = GetPermissionsManager().GetPlayer( GetIdentity().GetId() );
 			}
 		}
-
-		if ( Assert_Null( m_AuthenticatedPlayer ) )
-			return NULL;
 		
 		m_AuthenticatedPlayer.PlayerObject = this;
 		return m_AuthenticatedPlayer;
 	}
 
-	private void Safe_SetAuthenticatedPlayer()
+	protected void Safe_SetAuthenticatedPlayer()
 	{
 		if ( m_AuthenticatedPlayer || !GetIdentity() )
 			return;
@@ -640,7 +708,6 @@ modded class PlayerBase
 
 		return name + " (WARNING)";
 	}
-#endif
 
 	bool COTHasGodMode()
 	{
@@ -707,7 +774,7 @@ modded class PlayerBase
         if ( !COTHasGodMode() )
 			super.ProcessHandDamage(delta_time, pState);
 	}
-	
+
 	override void ProcessFeetDamageServer(int pUserInt)
 	{
         if ( !COTHasGodMode() )
@@ -732,6 +799,29 @@ modded class PlayerBase
 				DisableSimulation(m_JMIsFrozen);
 			}
 		}
+	}
+
+	bool COTIsRagdoll()
+	{
+		return m_JMIsRagdoll;
+	}
+
+	//! Cached, not read live off PhysicsIsRagdoll(): this runs from COT_UpdatePlayerVars at connect,
+	//! and querying physics before the entity's physics is up crashed the server.
+	//! GodMode and Freeze follow the same pattern.
+	void COTSetRagdoll( bool mode )
+	{
+#ifndef DAYZ_1_29
+		if ( g_Game.IsServer() )
+		{
+			PhysicsSetRagdoll( mode );
+			m_JMIsRagdoll = mode;
+
+			#ifdef SERVER
+			COT_SynchPlayerVars();
+			#endif
+		}
+#endif
 	}
 
 	void COTSetInvisibility( int mode, bool preference = true )
@@ -857,7 +947,7 @@ modded class PlayerBase
 		if ( g_Game.IsServer() )
 		{
 			GetModifiersManager().DeactivateAllModifiers();
-			
+
 			if ( m_AgentPool )
 				m_AgentPool.RemoveAllAgents();
 
@@ -866,7 +956,67 @@ modded class PlayerBase
 		}
 	}
 
+	void COTAddDisease( int agent, float count )
+	{
+		if ( g_Game.IsServer() )
+		{
+			if ( m_AgentPool )
+				m_AgentPool.AddAgent( agent, count );
+		}
+	}
+
+	void COTRemoveDisease( int agent )
+	{
+		if ( g_Game.IsServer() )
+		{
+			if ( m_AgentPool )
+				m_AgentPool.RemoveAgent( agent );
+		}
+	}
+
+	void COTActivateModifier( int modifier_id )
+	{
+		if ( g_Game.IsServer() && GetModifiersManager() )
+			GetModifiersManager().ActivateModifier( modifier_id );
+	}
+
+	void COTDeactivateModifier( int modifier_id )
+	{
+		if ( g_Game.IsServer() && GetModifiersManager() )
+			GetModifiersManager().DeactivateModifier( modifier_id );
+	}
+
+	int COTGetAgentCount( int agent )
+	{
+		if ( m_AgentPool )
+			return m_AgentPool.GetSingleAgentCount( agent );
+
+		return 0;
+	}
+
+	// Activate a bleeding source on the named body-part selection (e.g. "Head", "LeftArm").
+	// Vanilla index maps are internal, so we round-trip via the base class's zone
+	// enumeration, then call AddBleedingSource(bit).
+	bool COTAddBleedingByName( string selectionName )
+	{
+		if ( !g_Game.IsServer() )
+			return false;
+		if ( selectionName == "" )
+			return false;
+
+		BleedingSourcesManagerServer bms = GetBleedingManagerServer();
+		if ( !bms )
+			return false;
+
+		return bms.AttemptAddBleedingSourceBySelection( selectionName );
+	}
+
 	void COTResetItemWetness()
+	{
+		COT_SetItemWetness(0);
+	}
+
+	void COT_SetItemWetness(float wetness)
 	{
 		ItemBase item;
 		array< EntityAI > items = new array< EntityAI >;
@@ -875,7 +1025,7 @@ modded class PlayerBase
 		foreach ( EntityAI entity: items )
 		{
 			if ( Class.CastTo( item, entity ) )
-				item.SetWet( 0 );
+				item.SetWet( wetness );
 		}
 	}
 
@@ -972,6 +1122,20 @@ modded class PlayerBase
 		}
 	}
 
+	void COT_AddSpectator(PlayerBase spectator)
+	{
+		if (!m_JM_Spectators)
+			m_JM_Spectators = new set<PlayerBase>;
+
+		m_JM_Spectators.Insert(spectator);
+	}
+
+	void COT_RemoveSpectator(PlayerBase spectator)
+	{
+		if (m_JM_Spectators)
+			m_JM_Spectators.RemoveItem(spectator);
+	}
+
 	void COTResetSpectator()
 	{
 #ifdef JM_COT_DIAG_LOGGING
@@ -1006,7 +1170,7 @@ modded class PlayerBase
 	{
 		return m_COT_IsLeavingFreeCam;
 	}
-	
+
 	override void SetActions(out TInputActionMap InputActionMap)
 	{
 		super.SetActions(InputActionMap);
@@ -1041,8 +1205,11 @@ modded class PlayerBase
 
 	void COT_RememberVehicle()
 	{
-	#ifdef DIAG
+	#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_0(this);
+	#endif
+
+	#ifdef DIAG_DEVELOPER
 		PrintFormat("GetCommand_Move? %1", GetCommand_Move().ToString());
 		PrintFormat("GetCommand_Vehicle? %1", GetCommand_Vehicle().ToString());
 		//PrintFormat("m_COT_TransportCache? %1", m_COT_TransportCache.ToString());
@@ -1101,7 +1268,7 @@ modded class PlayerBase
 
 		super.OnCommandSwimStart();
 	}
-	
+
 	override void OnCommandLadderStart()
 	{
 		//! super will lock inventory again, but since locks stack, make sure we're not currently locked
@@ -1111,7 +1278,7 @@ modded class PlayerBase
 
 		super.OnCommandLadderStart();
 	}
-	
+
 	override void OnCommandFallStart()
 	{
 		//! super will lock inventory again, but since locks stack, make sure we're not currently locked
@@ -1121,7 +1288,7 @@ modded class PlayerBase
 
 		super.OnCommandFallStart();
 	}
-	
+
 	override void OnCommandClimbStart()
 	{
 		//! super will lock inventory again, but since locks stack, make sure we're not currently locked
@@ -1131,7 +1298,7 @@ modded class PlayerBase
 
 		super.OnCommandClimbStart();
 	}
-	
+
 	override void OnCommandVehicleStart()
 	{
 		//! super will lock inventory again, but since locks stack, make sure we're not currently locked
@@ -1157,8 +1324,11 @@ modded class PlayerBase
 
 	void COT_ResumeVehicleCommand()
 	{
-	#ifdef DIAG
+	#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_0(this);
+	#endif
+
+	#ifdef DIAG_DEVELOPER
 		PrintFormat("GetCommand_Vehicle? %1", GetCommand_Vehicle().ToString());
 		//PrintFormat("m_COT_TransportCache? %1", m_COT_TransportCache.ToString());
 	#endif
@@ -1176,11 +1346,13 @@ modded class PlayerBase
 			if (Class.CastTo(car, trans))
 			{
 				GetDayZGame().GetBacklit().OnLeaveCar();
+#ifdef DAYZ_1_29
 				if (g_Game.IsServer())
 				{
-					car.ForceUpdateLightsStart();
-					car.ForceUpdateLightsEnd();
+					car.ForceUpdateLightsStart(); //! obsolete 1.30, no replacement
+					car.ForceUpdateLightsEnd(); //! obsolete 1.30, no replacement
 				}
+#endif
 			}
 		}
 		//else if (m_COT_TransportCache)
@@ -1188,5 +1360,41 @@ modded class PlayerBase
 			//StartCommand_Vehicle(m_COT_TransportCache, m_COT_TransportCache_CrewIndex, m_COT_TransportCache_Seat, IsUnconscious());
 			//m_COT_TransportCache = null;
 		//}
+	}
+
+	void COT_SetLastHitSnapshot(JMAntiCheatKillEvent evt, int timeMs)
+	{
+		m_COT_LastHitSnapshot = evt;
+		m_COT_LastHitTime = timeMs;
+	}
+
+	JMAntiCheatKillEvent COT_GetLastHitSnapshot()
+	{
+		return m_COT_LastHitSnapshot;
+	}
+
+	int COT_GetLastHitTime()
+	{
+		return m_COT_LastHitTime;
+	}
+
+	override void EEKilled(Object killer)
+	{
+		super.EEKilled(killer);
+
+		JMAntiCheatKillHook.OnPlayerKilled(this, killer);
+		JMPlayerStatsHook.OnPlayerKilled(this, killer);
+
+		//! The position history is keyed by guid, not by character, so without
+		//! this the first sample after respawning reads as a teleport from
+		//! wherever this character died.
+		COT_GrantMove();
+	}
+
+	override void EEHitBy(TotalDamageResult damageResult, int damageType, EntityAI source, int component, string dmgZone, string ammo, vector modelPos, float speedCoef)
+	{
+		super.EEHitBy(damageResult, damageType, source, component, dmgZone, ammo, modelPos, speedCoef);
+
+		JMAntiCheatKillHook.OnPlayerHit(this, source, dmgZone, damageResult, ammo);
 	}
 }

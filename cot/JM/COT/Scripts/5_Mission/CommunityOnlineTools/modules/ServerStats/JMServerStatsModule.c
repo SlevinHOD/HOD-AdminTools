@@ -1,0 +1,436 @@
+// JMServerStatsModule.c - measures server frame rate and pushes it to admin clients
+// (Stats RPC, JMServerStatsModuleRPC @ 10940, broadcast to COT.View holders only). A server's
+// "fps" is its tick rate; one-percent lows matter because the average hides rubber-banding.
+// Also carries the anti-cheat flag count for the footer badge, cheaper than a second timer/RPC.
+
+class JMServerStatsModule : JMModuleBase
+{
+	//! Seconds between broadcasts. Short enough that the average tracks a live
+	//! server, long enough that the packet is noise next to normal traffic.
+	protected static const float BROADCAST_INTERVAL = 2.0;
+
+	//! Frame times kept for the percentile window. At a 45 fps server this is
+	//! about 23 seconds of history, which is the timescale a one-percent figure
+	//! is meaningful over - a 2 second window would hold one frame in its tail.
+	protected static const int SAMPLE_WINDOW = 1024;
+
+	//! Upper bound on how many frames the one-percent tails average over. Caps
+	//! the per-broadcast selection cost, and covers windows up to 3200 frames.
+	protected static const int TAIL_MAX = 32;
+
+	//! Ignore absurd deltas. The first tick after mission load, and the tick
+	//! after the server has been paused by the debugger, are not stutters worth
+	//! reporting - they would pin the one-percent low at ~0 for a whole window.
+	protected static const float FRAME_TIME_MAX = 1.0;
+
+	//! Server-side ring buffer of frame times in seconds.
+	protected float m_Samples[1024];  //! MUST match SAMPLE_WINDOW
+	protected int m_SampleNext;
+	protected bool m_SampleWrapped;
+	protected float m_BroadcastAccumulator;
+
+	//! Frame cap read once from cmdline, 0 when the server is uncapped.
+	protected int m_MaxFPS;
+
+	#ifdef DIAG
+	//! Publishes between diagnostic log lines - see Publish.
+	protected static const int DIAG_PRINT_EVERY = 10;
+	protected int m_DiagCounter;
+	#endif
+
+	void JMServerStatsModule()
+	{
+		//! DayZGame.OnUpdate's unthrottled per-tick hook - see
+		//! JMStatics.SERVER_STATS_TICK's own comment. The module is a
+		//! singleton for the session, so this runs once; no matching
+		//! Remove() is needed.
+		if ( !JMStatics.SERVER_STATS_TICK )
+			JMStatics.SERVER_STATS_TICK = new ScriptInvoker();
+
+		JMStatics.SERVER_STATS_TICK.Insert( Tick );
+	}
+
+	//! 0 when the anti-cheat module is absent or this is not the host - the
+	//! count only exists server-side, and a client reading its own empty table
+	//! would publish a badge that says "all clear" on no evidence.
+	protected void GetAntiCheatFlagged( out array< string > guids )
+	{
+		guids.Clear();
+
+		if ( !g_Game.IsServer() )
+			return;
+
+		JMAntiCheatModule antiCheat = CF_Modules<JMAntiCheatModule>.Get();
+		if ( !antiCheat )
+			return;
+
+		antiCheat.GetFlaggedGuids( guids );
+	}
+
+	//! How many samples the ring currently holds.
+	protected int GetSampleCount()
+	{
+		if ( m_SampleWrapped )
+			return SAMPLE_WINDOW;
+
+		return m_SampleNext;
+	}
+
+	override void DescribeModule( JMModuleInfo info )
+	{
+		super.DescribeModule( info );
+
+		info.SetRPCRange( JMServerStatsModuleRPC.INVALID, JMServerStatsModuleRPC.COUNT );
+	}
+
+	override void OnRPC( PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx )
+	{
+		switch ( rpc_type )
+		{
+		case JMServerStatsModuleRPC.Stats:
+			RPC_Stats( ctx, sender, target );
+			break;
+		}
+	}
+
+	override void OnMissionLoaded()
+	{
+		super.OnMissionLoaded();
+
+		JMServerStats.Clear();
+		JMAntiCheatStatus.Clear();
+
+		if ( !g_Game.IsServer() )
+			return;
+
+		m_BroadcastAccumulator = 0;
+
+		string limitFPS;
+		if (GetCLIParam( "limitFPS", limitFPS ))
+			m_MaxFPS = limitFPS.ToInt();
+	}
+
+	// ---- Sampling ----
+	//  Called from DayZGame.OnUpdate, not this module's OnUpdate: CF's module update loop is
+	//  rate-limited to 40 Hz on server, which would undercount ticks on a faster server.
+	void Tick( float timeslice )
+	{
+		if ( !g_Game.IsServer() )
+			return;
+
+		RecordFrame( timeslice );
+
+		m_BroadcastAccumulator += timeslice;
+
+		if ( m_BroadcastAccumulator < BROADCAST_INTERVAL )
+			return;
+
+		m_BroadcastAccumulator = 0;
+
+		Publish();
+	}
+
+	protected void RecordFrame( float timeslice )
+	{
+		//! @note a timeslice of 0 is a valid frame that must be counted
+		//! else reported avg FPS will be half of actual value if server
+		//! is running at high (> 1000) fps
+
+		if ( timeslice > FRAME_TIME_MAX )
+			return;
+
+		m_Samples[m_SampleNext] = timeslice;
+
+		m_SampleNext++;
+
+		if ( m_SampleNext < SAMPLE_WINDOW )
+			return;
+
+		m_SampleNext = 0;
+		m_SampleWrapped = true;
+	}
+
+	// ---- Percentiles ----
+	//  No full sort per broadcast: each tail is a small sorted array and every sample is tested
+	//  against its worst entry first - one compare for most samples, an O(TAIL) insert otherwise.
+	protected void Publish()
+	{
+		int count = GetSampleCount();
+
+		//! Nothing meaningful to say from a handful of frames.
+		if ( count < 32 )
+			return;
+
+		//! How many frames one percent of the window actually is, clamped so a
+		//! long window cannot blow past the tail arrays.
+		int tail = (int)Math.Round( count / 100.0 );
+		if ( tail < 1 )
+			tail = 1;
+		if ( tail > TAIL_MAX )
+			tail = TAIL_MAX;
+
+		//! Slowest and fastest frames, each kept sorted worst-first / best-first. total is
+		//! summed in this loop (free, since the tail scan runs anyway), and a fresh sum every
+		//! 2s cannot drift like a running total over a 6-hour session.
+		array< float > slowest = new array< float >;
+		array< float > fastest = new array< float >;
+		float total = 0;
+		int itcount;
+
+		for ( int i = 0; i < count; ++i )
+		{
+			++itcount;
+			float sample = m_Samples[i];
+
+			//! zero frametime entries would break our 1% fastest frames display,
+			//! so average frametime over next frame(s)
+			if ( sample == 0 )
+			{
+				float next = 0;
+
+				for ( int j = i + 1; j < count; ++j )
+				{
+					++itcount;
+					next += m_Samples[j];
+
+					if ( next > 0 )
+					{
+						int window = j - i + 1;
+						sample = next / window;
+
+						for ( int k = i; k < j + 1; ++k )
+						{
+							++itcount;
+							m_Samples[k] = sample;
+						}
+
+						break;
+					}
+				}
+			}
+
+			total += sample;
+
+			InsertDescending( slowest, sample, tail );
+
+			if ( sample )
+				InsertAscending( fastest, sample, tail );
+		}
+
+		float average = 0;
+		if ( total > 0 )
+			average = count / total;
+
+		float low = FrameTimesToFPS( slowest );
+		float high = FrameTimesToFPS( fastest );
+
+		#ifdef DIAG
+		//! Cross-check against the "Average server FPS" line the engine writes to
+		//! the RPT - the two measure the same tick rate and should agree. Every
+		//! tenth publish rather than every one: at a 2s broadcast this is a line
+		//! every 20s, which is a diagnostic rather than a log flood.
+		m_DiagCounter++;
+		if ( m_DiagCounter >= DIAG_PRINT_EVERY )
+		{
+			m_DiagCounter = 0;
+			PrintFormat( "[COT ServerStats] frames=%1 tail=%2 avg=%3 low1=%4 high1=%5 itcount=%6", count, tail, average, low, high, itcount );
+		}
+		#endif
+
+		Broadcast( average, low, high );
+	}
+
+	//! Keep the `limit` largest values, largest first.
+	protected void InsertDescending( array< float > list, float value, int limit )
+	{
+		int count = list.Count();
+
+		if ( count >= limit && value <= list.Get( count - 1 ) )
+			return;
+
+		int at = count;
+		for ( int i = 0; i < count; i++ )
+		{
+			if ( value > list.Get( i ) )
+			{
+				at = i;
+				break;
+			}
+		}
+
+		InsertSorted( list, value, at );
+
+		if ( list.Count() > limit )
+			list.Remove( list.Count() - 1 );
+	}
+
+	//! Keep the `limit` smallest values, smallest first.
+	protected void InsertAscending( array< float > list, float value, int limit )
+	{
+		int count = list.Count();
+
+		if ( count >= limit && value >= list.Get( count - 1 ) )
+			return;
+
+		int at = count;
+		for ( int i = 0; i < count; i++ )
+		{
+			if ( value < list.Get( i ) )
+			{
+				at = i;
+				break;
+			}
+		}
+
+		InsertSorted( list, value, at );
+
+		if ( list.Count() > limit )
+			list.Remove( list.Count() - 1 );
+	}
+
+	//! InsertAt requires index < Count() - appending through it is a native
+	//! out-of-bounds write, not a script error. Both callers compute "at" as a
+	//! sorted position that is legitimately Count() when the value belongs on
+	//! the end, so that case has to go through Insert instead.
+	protected void InsertSorted( array< float > list, float value, int at )
+	{
+		if ( at >= list.Count() )
+		{
+			list.Insert( value );
+			return;
+		}
+
+		list.InsertAt( value, at );
+	}
+
+	//! Mean frame rate of a set of frame times. Averaging the times and then
+	//! inverting is the correct order - averaging the individual rates would
+	//! weight a single fast frame the same as a single 200ms hitch.
+	protected float FrameTimesToFPS( array< float > frameTimes )
+	{
+		int count = frameTimes.Count();
+		if ( count == 0 )
+			return 0;
+
+		float total = 0;
+		for ( int i = 0; i < count; i++ )
+		{
+			total += frameTimes.Get( i );
+		}
+
+		if ( total <= 0 )
+			return 0;
+
+		return count / total;
+	}
+
+	// -------------------------------------------------------------------------
+	//  Transport
+	// -------------------------------------------------------------------------
+
+	//! Sent only to clients that can open COT. Everyone else has no use for it,
+	//! and server performance is not something to hand every connected player.
+	protected void Broadcast( float average, float low, float high )
+	{
+		int maxFPS = m_MaxFPS;
+
+		array< string > flaggedGuids = new array< string >;
+		GetAntiCheatFlagged( flaggedGuids );
+		int flagged = flaggedGuids.Count();
+
+		//! An offline / listen host is its own client: no packet, write through.
+		if ( !IsMissionOffline() )
+		{
+			TStringArray activeGUIDs = GetCOT().GetActiveGUIDs();
+
+			array< JMPlayerInstance > players = GetPermissionsManager().GetPlayers( activeGUIDs );
+
+			foreach ( JMPlayerInstance player: players )
+			{
+				//! JMPlayerInstance has no identity of its own - it caches the
+				//! guid/name at connect time and keeps the entity, so the live
+				//! identity has to come back off the player object.
+				if ( !player.PlayerObject )
+					continue;
+
+				PlayerIdentity identity = player.PlayerObject.GetIdentity();
+				if ( !identity )
+					continue;
+
+				//! Seeing COT is not the same as being allowed to know the
+				//! server has flagged someone, so this field is gated on its
+				//! own permission and sent as 0 to everyone else.
+				int flaggedForThem = 0;
+				if ( JMPermissions.Has( JMConstants.PERM_ANTICHEAT_VIEW, identity ) )
+					flaggedForThem = flagged;
+
+				ScriptRPC rpc = new ScriptRPC();
+				rpc.Write( average );
+				rpc.Write( low );
+				rpc.Write( high );
+				rpc.Write( maxFPS );
+				rpc.Write( flaggedForThem );
+
+				//! The GUIDs only go to whoever the count went to. Written one
+				//! by one rather than as an array so the reader can stop at the
+				//! count it already has, and so an unauthorised client is sent
+				//! nothing at all rather than an empty container.
+				foreach ( string flaggedGuid: flaggedGuids )
+				{
+					rpc.Write( flaggedGuid );
+				}
+
+				rpc.Send( NULL, JMServerStatsModuleRPC.Stats, false, identity );
+			}
+		}
+
+		//! An offline / listen host is its own admin, so it writes the real
+		//! count through rather than the gated copy.
+		if ( IsMissionClient() )
+		{
+			JMServerStats.Set( average, low, high, maxFPS );
+			JMAntiCheatStatus.Set( flagged, flaggedGuids );
+		}
+	}
+
+	protected void RPC_Stats( ParamsReadContext ctx, PlayerIdentity sender, Object target )
+	{
+		if ( !IsMissionClient() )
+			return;
+
+		float average;
+		if ( !ctx.Read( average ) )
+			return;
+
+		float low;
+		if ( !ctx.Read( low ) )
+			return;
+
+		float high;
+		if ( !ctx.Read( high ) )
+			return;
+
+		int maxFPS;
+		if ( !ctx.Read( maxFPS ) )
+			return;
+
+		JMServerStats.Set( average, low, high, maxFPS );
+
+		int flagged;
+		if ( !ctx.Read( flagged ) )
+			return;
+
+		array< string > flaggedGuids = new array< string >;
+
+		for ( int g = 0; g < flagged; g++ )
+		{
+			string flaggedGuid;
+			if ( !ctx.Read( flaggedGuid ) )
+				break;
+
+			flaggedGuids.Insert( flaggedGuid );
+		}
+
+		JMAntiCheatStatus.Set( flagged, flaggedGuids );
+	}
+}

@@ -1,0 +1,3317 @@
+//! Every action on a tracked object as one context menu, shared by the world tag and the ESP
+//! form's tracked list. Anything needing a value is a page of choices (a menu cannot be
+//! typed into); genuinely free-form values (exact position, lock code) go through the
+//! clipboard.
+class JMESPActionMenu
+{
+	//! Pages. The id of a row is its whole routing: "p:" navigates, "a:" acts,
+	//! and a trailing ":arg" carries the one parameter a page ever needs.
+	static const string PAGE_MAIN      = "main";
+	static const string PAGE_TRANSFORM = "transform";
+	static const string PAGE_TRANSFORM_COPY = "transformcopy";
+	static const string PAGE_TRANSFORM_PASTE = "transformpaste";
+	static const string PAGE_HEALTH    = "health";
+	static const string PAGE_QUANTITY  = "quantity";
+	static const string PAGE_LIQUID    = "liquid";
+	static const string PAGE_FOOD      = "food";
+	static const string PAGE_LOCK      = "lock";
+	static const string PAGE_BUILD     = "build";
+	static const string PAGE_PART      = "part";
+	static const string PAGE_VEHICLE   = "vehicle";
+	static const string PAGE_PLAYER    = "player";
+	static const string PAGE_WEAPON    = "weapon";
+	static const string PAGE_ATTACHMENTS  = "attachments";
+	static const string PAGE_ATTACH_SLOT  = "attachslot";
+	static const string PAGE_FIRE      = "fire";
+	static const string PAGE_SCALE     = "scale";
+	static const string PAGE_PARTHP    = "parthp";
+	static const string PAGE_FUEL      = "fuel";
+	static const string PAGE_COOLANT   = "coolant";
+	static const string PAGE_FLAG      = "flag";
+	static const string PAGE_COLOR     = "color";
+	static const string PAGE_COPY      = "copy";
+	static const string PAGE_COPY_PLAYER = "copyplayer";
+	static const string PREFIX_PAGE   = "p:";
+	static const string PREFIX_ACTION = "a:";
+
+	//! Shock is what consciousness is made of - there is no "make unconscious"
+	//! call - so it is set to either end of its range.
+	static const float SHOCK_CONSCIOUS = 100;
+
+	//! Body scales offered on the scale page. 1 is the only one that undoes the
+	//! others, so it is listed first.
+	static const string SCALE_VALUES = "1|0.5|0.75|1.5|2";
+
+	//! The one menu that floats over the world: both world entry points raise this same
+	//! instance, as only one menu can be open at a time. The ESP form keeps its own,
+	//! anchored inside its window so the list does not clip it.
+	protected static ref JMESPActionMenu s_Shared;
+	protected UIActionContextMenu m_Menu;
+	protected ref JMESPMeta m_Meta;
+
+	protected ItemBase m_LockItem;
+
+	//! Kept from Init() so the transform-edit popup can be built lazily, in
+	//! the same parent/anchor the menu itself uses - see GetTransformPopup().
+	protected Widget m_Parent;
+	protected Widget m_Anchor;
+	protected string m_Page;
+	protected string m_PageArg;
+	protected string m_PageTitle;
+	protected ref TStringStringMap m_PageLabels = new TStringStringMap;
+	protected ref TStringArray m_BreadCrumbs = {};
+	protected ref TStringArray m_BreadCrumbs_Labels = {};
+
+	//! The construction selection the menu was opened on, see Open.
+	protected string m_PartFilter;
+
+	ref map< string, ref JMConstructionPartData > m_FilteredParts;
+
+	//! Where the menu was first opened. Every page after the first reopens at
+	//! the same spot, so drilling in does not walk the menu across the screen.
+	protected float m_X;
+	protected float m_Y;
+
+	// Attachments: per-slot add/remove/swap on anything with attachment slots (GameInventory
+	// slot API). Candidates are every scope==2 CfgWeapons/CfgVehicles entry whose inventorySlot[]
+	// names the slot, so the list can be broader than the target accepts; the server's
+	// CreateAttachmentEx() enforces compatibility, so a bad pick just fails there.
+
+	UIActionContextMenu GetMenu()
+	{
+		return m_Menu;
+	}
+
+	//! Every scope==2 item anywhere in CfgWeapons/CfgVehicles that declares
+	//! this slot in its own inventorySlot[] - see the class-level note above
+	//! for why this is deliberately a wide net rather than a weapon-specific
+	//! compatibility table.
+	TStringStringMap GetSlotCandidates( int slotId, array<string> labels )
+	{
+	#ifdef DIAG_DEVELOPER
+	#ifdef DZ_Expansion_Core
+		auto trace = EXTrace.Profile(true, null, "JMESPActionMenu::GetSlotCandidates");
+	#endif
+	#endif
+
+		if ( slotId == InventorySlots.HANDS && m_Meta.target.IsMan() )
+			slotId = InventorySlots.SHOULDER;
+
+		TStringArray classNames = {};
+		TStringArray displayNames = {};
+		TStringSet seen = new TStringSet();
+		TStringStringMap candidatesByLabel = new TStringStringMap();
+
+		string displayName;
+		string uniqueLabel;
+
+		Weapon_Base weapon;
+		if ( slotId == InventorySlots.MAGAZINE && Class.CastTo( weapon, m_Meta.target ) )
+		{
+			TStringArray mags = weapon.COTGetMagazineTypesValidated( "magazines", weapon.GetCurrentMuzzle() );
+
+			foreach ( string mag: mags )
+			{
+				//! @note ConfigGetText returns already translated values
+				g_Game.ConfigGetText( CFG_MAGAZINESPATH + " "  + mag + " displayName", displayName );
+				uniqueLabel = InsertUnique( labels, mag, displayName, mags, displayNames, null, candidatesByLabel );
+				candidatesByLabel[uniqueLabel] = mag;
+			}
+		}
+		else
+		{
+			TStringArray configPaths = new TStringArray();
+			configPaths.Insert( CFG_VEHICLESPATH );
+
+			if ( !m_Meta.target.IsWeapon() )
+				configPaths.Insert( CFG_WEAPONSPATH );
+
+			foreach ( string configPath : configPaths )
+			{
+				int childCount = g_Game.ConfigGetChildrenCount( configPath );
+
+				for ( int i = 0; i < childCount; i++ )
+				{
+					string childName;
+					g_Game.ConfigGetChildName( configPath, i, childName );
+
+					if ( seen.Find( childName ) > -1 )
+						continue;
+
+					string path = configPath + " " + childName;
+					if ( g_Game.ConfigGetInt( path + " scope" ) != 2 )
+						continue;
+
+					string model;
+					if ( !g_Game.ConfigGetText( path + " model", model ) || model == "" || model == "bmp" )
+						continue;
+
+					//! @note ConfigGetText returns already translated values
+					if ( !g_Game.ConfigGetText( path + " displayName", displayName ) || displayName == "" || displayName.IndexOf("$UNT$") > -1 )
+						continue;
+
+					array<string> invSlots = g_Game.COT_GetInventorySlots( path );
+
+					foreach ( string invSlot : invSlots )
+					{
+						if ( InventorySlots.GetSlotIdFromString( invSlot ) == slotId )
+						{
+							classNames.Insert( childName );
+							seen.Insert( childName );
+
+							uniqueLabel = InsertUnique( labels, childName, displayName, classNames, displayNames, null, candidatesByLabel );
+							candidatesByLabel[uniqueLabel] = childName;
+
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		JMStatics.SortStringArrayIgnoreCase( labels );
+
+		return candidatesByLabel;
+	}
+
+	string InsertUnique( TStringArray labels, string className, string displayName, TStringArray classNames, TStringArray displayNames, TStringIntMap idByLabel = null, TStringStringMap classNameByLabel = null )
+	{
+	#ifdef DIAG_DEVELOPER
+	#ifdef DZ_Expansion_Core
+		auto trace = EXTrace.Profile(true, null, "JMESPActionMenu::InsertUnique");
+	#endif
+	#endif
+
+		string label;
+
+		if ( !displayName )
+			displayName = className;
+
+		int idx = displayNames.Find( displayName );
+		if ( idx == -1 )
+			label = displayName;
+		else
+		{
+			//! If displayname is already in list, replace with classname
+			string oldLabel = labels[idx];
+			string newLabel = classNames[idx];
+
+			if ( newLabel != oldLabel )
+			{
+				labels[idx] = newLabel;
+
+				if ( idByLabel )
+				{
+					idByLabel[newLabel] = idByLabel[oldLabel];
+					idByLabel.Remove( oldLabel );
+				}
+
+				if ( classNameByLabel )
+				{
+					classNameByLabel[newLabel] = classNameByLabel[oldLabel];
+					classNameByLabel.Remove( oldLabel );
+				}
+			}
+
+			label = className;
+		}
+
+		displayNames.Insert( displayName );
+		labels.Insert( label );
+
+		return label;
+	}
+
+	bool IsAttachmentSlotAccessible( EntityAI target, string slotName, out string partName )
+	{
+		Building building;
+		if ( Class.CastTo( building, target ) )
+		{
+			AdditionalDoorInfosHolder doorInfoHolder = building.GetDoorInfoHolder();
+
+			if ( doorInfoHolder )
+			{
+				map<int, ref AdditionalDoorInfo> doorInfoMap = doorInfoHolder.GetDoorInfoMap();
+
+				string slotNameLower = slotName;
+				slotNameLower.ToLower();
+
+				foreach ( int doorIndex, AdditionalDoorInfo doorInfo: doorInfoMap )
+				{
+					if ( doorInfo.m_RelatedInventorySlotNames )
+					{
+						foreach ( string slotNameCandidate: doorInfo.m_RelatedInventorySlotNames )
+						{
+							string slotNameCandidateLower = slotNameCandidate;
+							slotNameCandidateLower.ToLower();
+
+							if ( slotNameCandidateLower == slotNameLower )
+							{
+								ConstructionBase construction = ConstructionBase.Cast( building.GetConstructionBasic() );
+
+								partName = doorInfo.m_DoorConstructionPartName;
+
+								if ( !partName || construction.IsPartConstructed( partName ) )
+									return true;
+
+								return false;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		return true;
+	}
+
+	[Obsolete("Use GetMeta")]
+	JMESPMeta GetTarget()
+	{
+		return m_Meta;
+	}
+
+	JMESPMeta GetMeta()
+	{
+		return m_Meta;
+	}
+
+	//! Built on first use, in the same parent/anchor the context menu itself
+	//! was given - see the class note on JMESPTransformPopup for why this is
+	//! a separate floating panel rather than a menu page.
+	protected JMESPTransformPopup GetTransformPopup()
+	{
+		if ( m_Meta.m_TransformPopup )
+			return m_Meta.m_TransformPopup;
+
+		if ( !m_Parent || !m_Anchor )
+			return null;
+
+		m_Meta.m_TransformPopup = JMESPTransformPopup.Create( m_Parent, m_Anchor );
+
+		return m_Meta.m_TransformPopup;
+	}
+
+	//! Whether this thing has a cargo space at all. The structure, not the contents: a
+	//! client is not told what is inside a container it never opened, so counting items
+	//! would hide the row on exactly the full crates it is for.
+	protected bool HasCargo( EntityAI entity )
+	{
+		if ( !entity || !entity.GetInventory() )
+			return false;
+
+		return entity.GetInventory().GetCargo() != NULL;
+	}
+
+	protected bool HasEmptyAttachmentSlots( EntityAI entity )
+	{
+		if ( !entity || !entity.GetInventory() )
+			return false;
+
+		int count = entity.GetInventory().GetAttachmentSlotsCount();
+		if ( count == 0 )
+			return false;
+
+		for ( int i = 0; i < count; ++i )
+		{
+			int slotId = entity.GetInventory().GetAttachmentSlotId( i );
+			if ( slotId != InventorySlots.INVALID && InventorySlots.GetShowForSlotId( slotId ) )
+			{
+				if ( !entity.GetInventory().FindAttachment( slotId ) )
+					return true;
+			}
+		}
+
+		return false;
+	}
+
+	protected bool HasTeleportRedo()
+	{
+		return JMTeleportHistory.HasRedo( JMTeleportHistory.KeyFor( m_Meta.target ) );
+	}
+
+	protected bool HasTeleportUndo()
+	{
+		return JMTeleportHistory.Has( JMTeleportHistory.KeyFor( m_Meta.target ) );
+	}
+
+	bool IsOpen()
+	{
+		return m_Menu && m_Menu.IsOpen();
+	}
+
+	protected bool IsSelected()
+	{
+		return JM_GetSelected().IsObjectSelected( m_Meta.target );
+	}
+
+	//! The immobilised flag off whichever of the two creature families this is.
+	//!
+	//! Both carry it as a synced bool, so the row can report the state it is
+	//! about to flip instead of guessing at it.
+	protected bool CreatureIsImmobilized()
+	{
+		ZombieBase zombie;
+		AnimalBase animal;
+
+		if ( Class.CastTo( zombie, m_Meta.target ) )
+			return zombie.COT_IsImmobilized();
+
+		if ( Class.CastTo( animal, m_Meta.target ) )
+			return animal.COT_IsImmobilized();
+
+		return false;
+	}
+
+	//! Build the menu this instance drives. The caller keeps the returned
+	//! control so it can register it as an overlay, and hands back a parent for
+	//! it to live in - the ESP container for a world tag, the form's window for
+	//! the tracked list.
+	UIActionContextMenu Init( notnull Widget parent, notnull Widget anchor )
+	{
+		m_Parent = parent;
+		m_Anchor = anchor;
+
+		m_Menu = UIActionManager.CreateContextMenu( parent, anchor, this, "OnMenuClick" );
+		m_Menu.SetHoverCallback( this, "OnMenuHover" );
+		m_Menu.SetCloseOnClick( false );
+
+		return m_Menu;
+	}
+
+	//! The world menu, built on first use. Parented to the ESP container (created once per
+	//! client at mission load) rather than the raiser, so it cannot be torn out from under
+	//! itself when the opening thing stops being tracked.
+	static JMESPActionMenu Shared( bool create = true )
+	{
+		if ( !JMStatics.ESP_CONTAINER )
+			return NULL;
+
+		if ( s_Shared || !create )
+			return s_Shared;
+
+		JMESPActionMenu menu = new JMESPActionMenu();
+
+		if ( !menu.Init( JMStatics.ESP_CONTAINER, JMStatics.ESP_CONTAINER ) )
+			return NULL;
+
+		s_Shared = menu;
+
+		return s_Shared;
+	}
+
+	static JMESPActionMenu GetMenuForEntityIfOpen( Object target )
+	{
+		JMESPActionMenu menu = Shared( false );
+
+		if ( menu && menu.IsOpen() && menu.GetMeta() && menu.GetMeta().target == target )
+			return menu;
+
+		return null;
+	}
+
+	//! `partFilter` is the construction selection the right-click landed on ("" for none): the
+	//! construction page lists only the parts built from it. It belongs to this open, not to the
+	//! meta, which is cached and reused by every other way of opening the menu.
+	void Open( JMESPMeta meta, float x, float y, string partFilter = "" )
+	{
+		if ( !m_Menu )
+		{
+			Error("[JMESPActionMenu] Open failed: m_Menu is null!");
+			return;
+		}
+
+		if ( !meta || !meta.target )
+		{
+			Error("[JMESPActionMenu] Open failed: meta or meta.target is null!");
+			return;
+		}
+
+		m_Meta    = meta;
+		m_PartFilter = partFilter;
+		m_Page    = PAGE_MAIN;
+		m_PageArg = "";
+		m_X       = x;
+		m_Y       = y;
+
+		m_PageLabels.Clear();
+		m_BreadCrumbs.Clear();
+		m_BreadCrumbs_Labels.Clear();
+		m_PageTitle = "";
+
+		Show();
+	}
+
+	void Close()
+	{
+		if ( m_Menu )
+			m_Menu.Close();
+	}
+
+	// =========================================================================
+	//  Page building
+	// =========================================================================
+
+	protected void Show()
+	{
+		if ( !m_Meta || !m_Meta.target )
+			return;
+
+		#ifdef COT_DEBUGLOGS
+		Print("[COT_DBG] JMESPActionMenu.Show() page=" + m_Page + " arg=" + m_PageArg);
+		#endif
+
+		m_Menu.ClearItems();
+
+		switch ( m_Page )
+		{
+		case PAGE_TRANSFORM:
+			BuildTransform();
+			break;
+		case PAGE_TRANSFORM_COPY:
+			BuildTransformCopy();
+			break;
+		case PAGE_TRANSFORM_PASTE:
+			BuildTransformPaste();
+			break;
+		case PAGE_HEALTH:
+			BuildHealth();
+			break;
+		case PAGE_QUANTITY:
+			BuildQuantity();
+			break;
+		case PAGE_LIQUID:
+			BuildLiquid();
+			break;
+		case PAGE_FOOD:
+			BuildFood();
+			break;
+		case PAGE_LOCK:
+			auto il = new InventoryLocation();
+			if ( m_LockItem && m_LockItem.GetInventory().GetCurrentInventoryLocation( il ) )
+			{
+				m_PageArg = il.GetSlot().ToString();
+				BuildAttachSlot( PAGE_MAIN );
+			}
+			break;
+		case PAGE_BUILD:
+			BuildConstruction();
+			break;
+		case PAGE_PART:
+			BuildPart();
+			break;
+		case PAGE_WEAPON:
+			BuildWeapon();
+			break;
+		case PAGE_ATTACHMENTS:
+			BuildAttachments();
+			break;
+		case PAGE_ATTACH_SLOT:
+			BuildAttachSlot( PAGE_ATTACHMENTS );
+			break;
+		case PAGE_FIRE:
+			BuildFire();
+			break;
+		case PAGE_SCALE:
+			BuildScale();
+			break;
+		case PAGE_PARTHP:
+			BuildPartHealth();
+			break;
+		case PAGE_FUEL:
+			BuildFuel();
+			break;
+		case PAGE_COOLANT:
+			BuildCoolant();
+			break;
+		case PAGE_FLAG:
+			BuildFlag();
+			break;
+		case PAGE_COLOR:
+			BuildColor();
+			break;
+		case PAGE_COPY:
+			BuildCopy();
+			break;
+		case PAGE_COPY_PLAYER:
+			BuildCopyPlayer();
+			break;
+		case PAGE_VEHICLE:
+			BuildVehicle();
+			break;
+		case PAGE_PLAYER:
+			BuildPlayer();
+			break;
+		default:
+			BuildMain();
+			break;
+		}
+
+		m_Menu.OpenAt( m_X, m_Y );
+	}
+
+	//! `enabled` is (almost) always a permission check, sometimes ANDed with state; false
+	//! means the row is not doable now, so it is skipped rather than added disabled.
+	//! The menu is rebuilt on every Show() (see ClearItems()), so no stale row remains.
+	protected void Add( string id, string label, string icon, bool enabled = true, int colour = 0 )
+	{
+		if ( !enabled )
+			return;
+
+		m_Menu.AddItem( id, label, icon, colour );
+	}
+
+	//! A row that opens another page. The trailing chevron is the whole point:
+	//! a page and a command look identical without it.
+	protected void AddPage( string page, string label, string icon, bool enabled = true )
+	{
+		if ( !enabled )
+			return;
+
+		m_Menu.AddItem( PREFIX_PAGE + page, label, icon, 0, true );
+
+		if ( !m_PageLabels.Contains( page ) )
+		{
+			int split = label.IndexOf( ":" );
+
+			if ( split > -1 )
+				label = label.Substring( 0, split );
+
+			m_PageLabels[page] = label;
+		}
+	}
+
+	//! A row that reports a state as well as offering to change it: the glyph
+	//! is the state, the label is the thing.
+	protected void AddToggle( string id, string label, bool state, bool enabled = true )
+	{
+		string icon = JMConstants.Lucide( "square" );
+
+		if ( state )
+			icon = JMConstants.Lucide( "check" );
+
+		Add( id, label, icon, enabled );
+	}
+
+	//! The five rows every "how much of it" page is made of. The two ends are named
+	//! ("Full") rather than numbered ("100%"): only the name reads as an answer to the
+	//! page's question.
+	protected void AddPercentRows( string action, string fullLabel, string emptyLabel, string icon, bool enabled, int emptyColour = 0 )
+	{
+		Add( PREFIX_ACTION + action + ":100", fullLabel, icon, enabled );
+		Add( PREFIX_ACTION + action + ":75", "75%", "", enabled );
+		Add( PREFIX_ACTION + action + ":50", "50%", "", enabled );
+		Add( PREFIX_ACTION + action + ":25", "25%", "", enabled );
+		Add( PREFIX_ACTION + action + ":0", emptyLabel, "", enabled, emptyColour );
+	}
+
+	//! `page` lets a sub-page of a sub-page (Transform > Copy) go back one
+	//! level instead of all the way to Main - every other page is one level
+	//! deep, so the default keeps their call sites unchanged.
+	protected void AddBack( string page = PAGE_MAIN, string label = "" )
+	{
+		if ( !label )
+		{
+			label = m_PageTitle;
+
+			if ( !label )
+				label = "#STR_COT_ESP_MODULE_MENU_BACK";
+		}
+		
+		Add( PREFIX_PAGE + page, label, JMConstants.Lucide( "chevron-left" ) );
+	}
+
+	protected bool Perm( string permission )
+	{
+		return JMPermissions.Has( permission );
+	}
+
+	protected float MaxHealth()
+	{
+		//! Anything health/dmg system related can segfault on plain objects
+		if ( m_Meta.target.IsPlainObject() )
+			return 0;
+
+		return MiscGameplayFunctions.GetTypeMaxGlobalHealth( m_Meta.target.GetType() );
+	}
+
+	protected void BuildMain()
+	{
+		Object target = m_Meta.target;
+
+		//! A locally spawned object (in offline/SP, we cannot know if the object is local since client acts as the server)
+		bool isLocal = !m_Meta.networkLow && !m_Meta.networkHigh && g_Game.IsMultiplayer();
+
+		if ( IsSelected() )
+			Add( PREFIX_ACTION + "deselect", m_Meta.GetLabel(), JMConstants.Lucide( "check" ) );
+		else
+			Add( PREFIX_ACTION + "select", m_Meta.GetLabel(), JMConstants.Lucide( "square" ) );
+
+		AddPage( PAGE_TRANSFORM, "#STR_COT_ESP_MODULE_PAGE_TRANSFORM", JMConstants.Lucide( "move-3d" ) );
+
+		if ( !isLocal )
+		{
+			if ( MaxHealth() > 0 )
+				AddPage( PAGE_HEALTH, "#STR_COT_ESP_MODULE_PAGE_HEALTH", JMConstants.Lucide( "heart-pulse" ) );
+		}
+
+		ItemBase item = ItemBase.Cast( target );
+
+		if ( item )
+		{
+			if ( item.GetQuantityMax() > 0 )
+				AddPage( PAGE_QUANTITY, "#STR_COT_ESP_MODULE_PAGE_QUANTITY", JMConstants.Lucide( "package" ) );
+
+			if ( item.IsLiquidContainer() )
+				AddPage( PAGE_LIQUID, "#STR_COT_ESP_MODULE_PAGE_LIQUID", JMConstants.Lucide( "droplet" ) );
+
+			if ( item.IsInherited( Edible_Base ) )
+				AddPage( PAGE_FOOD, "#STR_COT_ESP_MODULE_PAGE_FOOD", JMConstants.Lucide( "utensils" ) );
+
+			if ( item.CanBeDisinfected() )
+				AddToggle( PREFIX_ACTION + "disinfect", "#STR_COT_ESP_MODULE_ACTION_DISINFECTED", item.GetCleanness() > 0, Perm( JMConstants.PERM_ESP_OBJECT_SETCLEANNESS ) );
+		}
+
+		m_LockItem = JMLockItem.Get( target, m_Meta.m_DoorIndex );
+
+		if ( m_Meta.GetConstructionParts() )
+			AddPage( PAGE_BUILD, "#STR_COT_ESP_MODULE_PAGE_BUILD", JMConstants.Lucide( "hammer" ) );
+
+		if ( target.IsInherited( Weapon_Base ) )
+			AddPage( PAGE_WEAPON, "#STR_COT_ESP_MODULE_PAGE_WEAPON", JMConstants.Lucide( "crosshair" ) );
+
+		if ( target.IsInherited( FireplaceBase ) )
+			AddPage( PAGE_FIRE, "#STR_COT_ESP_MODULE_PAGE_FIRE", JMConstants.Lucide( "flame" ) );
+
+		if ( target.IsInherited( Transport ) )
+			AddPage( PAGE_VEHICLE, "#STR_COT_ESP_MODULE_PAGE_VEHICLE", JMConstants.Lucide( "car" ) );
+
+		//! Recolors the target and, best-effort, attached children with their own color token.
+		//! Offered on anything with an inventory (clothing and gear can be color-suffixed),
+		//! never on a player (no color token), and hidden rather than shown-disabled when the
+		//! classname has no variants.
+		EntityAI colorEntity = EntityAI.Cast( target );
+		if ( colorEntity && !PlayerBase.Cast( target ) && Perm( JMConstants.PERM_ESP_OBJECT_CHANGECOLOR ) )
+		{
+			//auto trace = EXTrace.Start(true);
+			JMObjectSpawnerModule objSpawner;
+			if ( CF_Modules<JMObjectSpawnerModule>.Get( objSpawner ) && objSpawner.GetAvailableColorVariants( colorEntity ).Count() > 0 )
+				AddPage( PAGE_COLOR, "#STR_COT_ESP_MODULE_PAGE_COLOR", JMConstants.Lucide( "palette" ) );
+			//trace = null;
+		}
+
+		//! TargetPlayer, not m_Meta.player: the meta's own copy is filled from
+		//! the target's identity and is null for most of the roster, so gating
+		//! on it hid the whole player page for players this client could still
+		//! name perfectly well.
+		if ( TargetPlayer() )
+			AddPage( PAGE_PLAYER, "#STR_COT_ESP_MODULE_PAGE_PLAYER", JMConstants.Lucide( "user" ) );
+
+		Grenade_Base grenade = Grenade_Base.Cast( target );
+		if ( grenade )
+		{
+			if ( grenade.IsPinned() )
+				Add( PREFIX_ACTION + "unpingrenade", "#STR_COT_ESP_MODULE_MENU_UNPIN_GRENADE", JMConstants.Lucide( "bomb" ), Perm( JMConstants.PERM_ESP_OBJECT_SETQUANTITY ) );
+			else
+				Add( PREFIX_ACTION + "pingrenade", "#STR_COT_ESP_MODULE_MENU_PIN_GRENADE", JMConstants.Lucide( "shield" ), Perm( JMConstants.PERM_ESP_OBJECT_SETQUANTITY ) );
+		}
+
+		TrapBase trap = TrapBase.Cast( target );
+		if ( trap )
+		{
+			//! Arming and setting it off are different things and a trap can be
+			//! worth both in a session - a beartrap dropped by an admin is armed
+			//! first and sprung later - so the toggle and the trigger are two
+			//! rows rather than one that changes meaning.
+			if ( trap.IsActive() )
+				Add( PREFIX_ACTION + "disarmtrap", "#STR_COT_ESP_MODULE_MENU_DISARM_TRAP", JMConstants.Lucide( "shield-check" ), Perm( JMConstants.PERM_ESP_OBJECT_TRAP ) );
+			else
+				Add( PREFIX_ACTION + "armtrap", "#STR_COT_ESP_MODULE_MENU_ARM_TRAP", JMConstants.Lucide( "shield-alert" ), Perm( JMConstants.PERM_ESP_OBJECT_TRAP ) );
+
+			Add( PREFIX_ACTION + "triggertrap", "#STR_COT_ESP_MODULE_MENU_TRIGGER_TRAP", JMConstants.Lucide( "flame" ), Perm( JMConstants.PERM_ESP_OBJECT_TRAP ), JMTheme.DANGER );
+		}
+
+		//! A flag pole's mast, which in vanilla is also its refresher timer.
+		if ( target.IsInherited( TerritoryFlag ) )
+			AddPage( PAGE_FLAG, "#STR_COT_ESP_MODULE_PAGE_FLAG", JMConstants.Lucide( "flag" ), Perm( JMConstants.PERM_ESP_OBJECT_FLAG ) );
+
+		//! Infected and animals only. A player is a DayZPlayer, not a creature,
+		//! and has the player page's freeze for the same job.
+		if ( target.IsInherited( ZombieBase ) || target.IsInherited( AnimalBase ) )
+			AddToggle( PREFIX_ACTION + "immobilize", "#STR_COT_ESP_MODULE_ACTION_IMMOBILIZED", CreatureIsImmobilized(), Perm( JMConstants.PERM_ESP_OBJECT_IMMOBILIZE ) );
+
+		//! START open/close actions per entity
+
+		Fence fence = Fence.Cast( target );
+		if ( fence )
+		{
+			// Same eligibility vanilla's own gate action uses - a gate with
+			// no hinges built yet has nothing here to open or close.
+			// Since we're admin, can always open a locked gate.
+			if ( fence.CanCloseFence() )
+				Add( PREFIX_ACTION + "closefence", "#STR_COT_ESP_MODULE_MENU_CLOSE_FENCE", JMConstants.Lucide( "door-closed" ), Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+			else if ( fence.HasHinges() && !fence.IsOpened() )
+				Add( PREFIX_ACTION + "openfence", "#STR_COT_ESP_MODULE_MENU_OPEN_FENCE", JMConstants.Lucide( "door-open" ), Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+		}
+
+		TentBase tent = TentBase.Cast( target );
+		if ( tent && tent.GetState() == TentBase.PITCHED )
+		{
+			if ( tent.COT_IsOpen() )
+				Add( PREFIX_ACTION + "closetent", "#STR_COT_ESP_MODULE_MENU_CLOSE_TENT", JMConstants.Lucide( "tent" ), Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+			else
+				Add( PREFIX_ACTION + "opentent", "#STR_COT_ESP_MODULE_MENU_OPEN_TENT", JMConstants.Lucide( "tent" ), Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+		}
+
+		//! A static map building only offers door actions when the right-click
+		//! actually landed on one of its doors (m_DoorIndex, resolved from the
+		//! raycast component at menu-open time) - a house with no door under
+		//! the cursor gets none of this, same as any other static prop.
+		Building house = Building.Cast( target );
+		if ( house && m_Meta.m_DoorIndex >= 0 )
+		{
+			int doorIndex = m_Meta.m_DoorIndex;
+
+			if ( house.IsDoorOpen( doorIndex ) )
+			{
+				if ( house.CanDoorBeClosed( doorIndex ) )
+					Add( PREFIX_ACTION + "closedoor", GetDoorLabel( "#STR_COT_ESP_MODULE_MENU_CLOSE_DOOR" ), JMConstants.Lucide( "door-closed" ), Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+			}
+			else if ( house.CanDoorBeOpened( doorIndex, true ) || house.IsDoorLocked( doorIndex ) || ( m_LockItem && m_LockItem.COT_IsLocked() ) )
+			{
+				Add( PREFIX_ACTION + "opendoor", GetDoorLabel( "#STR_COT_ESP_MODULE_MENU_OPEN_DOOR" ), JMConstants.Lucide( "door-open" ), Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+			}
+
+			//! Locking after opening/closing - so it stays grouped with attached lock submenu below
+
+			if ( house.IsDoorLocked( doorIndex ) || ( m_LockItem && m_LockItem.COT_IsLocked() ) )
+				Add( PREFIX_ACTION + "unlockdoor", GetDoorLabel( "#STR_COT_ESP_MODULE_MENU_UNLOCK_DOOR" ), JMConstants.Lucide( "lock-open" ), Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+			else if ( ( house.CanDoorBeLocked( doorIndex ) && ( !m_LockItem || m_LockItem.COT_CanBeLocked() ) ) || ( m_LockItem && m_LockItem.COT_CanBeLocked() ) )
+				Add( PREFIX_ACTION + "lockdoor", GetDoorLabel( "#STR_COT_ESP_MODULE_MENU_LOCK_DOOR" ), JMConstants.Lucide( "lock" ), Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+		}
+
+		//! General openable item open/close actions if nothing else matches
+		if ( item && !fence && !tent && !house )
+		{
+			//! Open and Close are no-op virtuals on a plain ItemBase, so this is limited to
+			//! containers that override them. The row names the action, not the current state:
+			//! a menu entry is a verb, and "Open" on an open container reads as a statement.
+			if ( item.COT_IsOpenable() )
+			{
+				string iconClose;
+				string iconOpen;
+
+				if ( item.IsInherited( BaseBuildingBase ) )
+				{
+					iconClose = JMConstants.Lucide( "door-closed" );
+					iconOpen = JMConstants.Lucide( "door-open" );
+				}
+				else
+				{
+					iconClose = JMConstants.Lucide( "package" );
+					iconOpen = JMConstants.Lucide( "package-open" );
+				}
+
+				if ( item.IsOpen() )
+					Add( PREFIX_ACTION + "closeitem", "#STR_COT_ESP_MODULE_ACTION_CLOSE", iconClose, Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+				else
+					Add( PREFIX_ACTION + "openitem", "#STR_COT_ESP_MODULE_ACTION_OPEN", iconOpen, Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+			}
+		}
+
+		//! END open/close actions per entity
+
+		//! Attached lock submenu
+		if ( m_LockItem && m_LockItem.COT_CanInteract() )
+		{
+			AddPage( PAGE_LOCK, GetUniqueAttachmentLabel( m_LockItem ), JMConstants.Lucide( "lock" ) );
+		}
+
+		//! Weapons, vehicles and clothing expose attachment slots through the same GameInventory
+		//! API, so one page covers all three. A player is excluded (its gear is reached through
+		//! its inventory), same as color-change above.
+		EntityAI attachEntity = EntityAI.Cast( target );
+		GameInventory attachInv;
+		if ( attachEntity )
+			attachInv = attachEntity.GetInventory();
+
+		if ( attachInv && attachInv.GetAttachmentSlotsCount() > 0 )
+			AddPage( PAGE_ATTACHMENTS, "#STR_COT_ESP_MODULE_PAGE_ATTACHMENTS", JMConstants.Lucide( "puzzle" ), Perm( JMConstants.PERM_ESP_OBJECT_SETATTACHMENT ) );
+
+		AddPage( PAGE_COPY, "#STR_COT_GENERIC_COPY", JMConstants.Lucide( "copy" ) );
+
+		//! We can spectate anything, it's not limited to players
+		if ( ( m_Meta.networkLow || m_Meta.networkHigh ) && g_Game.IsMultiplayer() )
+		{
+			string spectateLabel;
+
+			PlayerBase player;
+			if ( Class.CastTo( player, g_Game.GetPlayer() ) && player.m_JM_SpectatedObject != target )
+				spectateLabel = "#STR_COT_PLAYER_MODULE_ACTION_SPECTATE";
+			else
+				spectateLabel = "#STR_COT_PLAYER_MODULE_ACTION_SPECTATE_STOP";
+
+			Add( PREFIX_ACTION + "spectate", spectateLabel, JMConstants.Lucide( "eye" ), Perm( JMConstants.PERM_PLAYER_SPECTATE ) );
+		}
+
+		if ( !isLocal )
+		{
+			//! Anything that can hold cargo can have it emptied - a tent, a crate, a
+			//! car boot. A player is skipped because the player page carries its own
+			//! clear cargo, routed through the player module for the logging.
+			if ( HasCargo( EntityAI.Cast( target ) ) && !TargetPlayer() )
+				Add( PREFIX_ACTION + "objclearcargo", "#STR_COT_PLAYER_MODULE_ACTION_CLEAR_CARGO", JMConstants.Lucide( "package-x" ), Perm( JMConstants.PERM_ESP_OBJECT_CLEARCARGO ), JMTheme.DANGER );
+		}
+
+		//! Plain objects are baked map objects, they cannot be deleted
+		if ( !target.IsPlainObject() )
+			Add( PREFIX_ACTION + "delete", "#STR_COT_GENERIC_DELETE", JMConstants.ICON_TRASH_CAN, Perm( JMConstants.PERM_ESP_OBJECT_DELETE ) && m_Meta.CanDelete(), JMTheme.DANGER );
+
+		JMContextMenuRegistry.Populate( "3DWorld", m_Menu );
+	}
+
+	string GetDoorLabel( string label, bool simple = true )
+	{
+		BuildingBase building;
+		if ( m_Meta.m_DoorIndex > -1 && Class.CastTo( building, m_Meta.target ) && building.GetDoorCount() > 1 )
+		{
+			if ( simple )
+				return string.Format( "%1 %2", label, GetDoorPartNumber( building, m_Meta.m_DoorIndex ) );
+			else
+				return string.Format( "%1 (#STR_COT_DOOR %2)", label, GetDoorPartNumber( building, m_Meta.m_DoorIndex ) );
+		}
+
+		return label;
+	}
+
+	//! Reason for this: Construction part number does not necessarily match door index + 1. E.g.
+	//! part name     door index + 1
+	//! door1_wood    1
+	//! door1_metal   2
+	//! door2_wood    3
+	//! door2_metal   4
+	//! etc.
+	int GetDoorPartNumber( BuildingBase building, int doorIndex )
+	{
+		AdditionalDoorInfo doorInfo = building.GetDoorInfo( doorIndex );
+
+		if ( doorInfo && doorInfo.m_RelatedInventorySlotNames )
+			return GetDoorPartNumber( doorIndex, doorInfo.m_RelatedInventorySlotNames[0] );
+
+		return doorIndex + 1;  //! fallback
+	}
+
+	int GetDoorPartNumber( int doorIndex, string slotName )
+	{
+		string numberPart;
+
+		string numbers = "0123456789";
+		for ( int i = 0; i < slotName.Length(); ++i )
+		{
+			string c = slotName[i];
+			if ( numbers.Contains( c ) )
+				numberPart += c;
+			else if ( numberPart.Length() > 0 )
+				break;  //! Only consecutive numbers, break on 1st non-number char when numberPart is no longer empty string
+		}
+
+		if ( numberPart.Length() > 0 )
+			return numberPart.ToInt();
+
+		return doorIndex + 1;  //! fallback
+	}
+
+	protected void BuildTransform()
+	{
+		AddBack();
+
+		bool canMove = Perm( JMConstants.PERM_ESP_OBJECT_SETPOSITION );
+		bool canTurn = Perm( JMConstants.PERM_ESP_OBJECT_SETORIENTATION );
+
+		//! The two teleports the player and vehicle managers already offer over
+		//! their own lists, over anything ESP tracks. Bringing a tracked player
+		//! goes through the teleport module rather than a raw SetPosition, so it
+		//! is logged and webhooked like every other teleport of a player.
+		bool canBring = canMove;
+
+		if ( TargetPlayer() )
+			canBring = Perm( JMConstants.PERM_PLAYER_TELEPORT_POSITION );
+
+		Add( PREFIX_ACTION + "tpme", "#STR_COT_PLAYER_MODULE_TELEPORT_ME_TO", JMConstants.Lucide( "footprints" ), Perm( JMConstants.PERM_PLAYER_TELEPORT_POSITION ) );
+		Add( PREFIX_ACTION + "tphere", "#STR_COT_PLAYER_MODULE_TELEPORT_TO_ME", JMConstants.Lucide( "move-down-left" ), canBring );
+
+		//! Greyed rather than dropped when there is nothing to take back: the
+		//! row disappearing would move every entry under it between one opening
+		//! of the menu and the next.
+		Add( PREFIX_ACTION + "tpundo", "#STR_COT_TELEPORT_UNDO", JMConstants.Lucide( "undo-2" ), canBring && HasTeleportUndo() );
+		Add( PREFIX_ACTION + "tpredo", "#STR_COT_TELEPORT_REDO", JMConstants.Lucide( "redo-2" ), canBring && HasTeleportRedo() );
+
+		AddPage( PAGE_TRANSFORM_COPY, "#STR_COT_GENERIC_COPY", JMConstants.Lucide( "copy" ) );
+		AddPage( PAGE_TRANSFORM_PASTE, "#STR_COT_GENERIC_PASTE", JMConstants.Lucide( "clipboard-paste" ), canMove || canTurn );
+
+		Add( PREFIX_ACTION + "ground", "#STR_COT_ESP_MODULE_MENU_SNAP_GROUND", JMConstants.Lucide( "arrow-down-to-line" ), canMove );
+		Add( PREFIX_ACTION + "facecam", "#STR_COT_ESP_MODULE_MENU_FACE_CAMERA", JMConstants.Lucide( "rotate-cw" ), canTurn );
+
+		Add( PREFIX_ACTION + "edittransform", "#STR_COT_ESP_MODULE_MENU_EDIT_TRANSFORM", JMConstants.Lucide( "pencil" ), canMove || canTurn );
+	}
+
+	protected void BuildTransformCopy()
+	{
+		AddBack( PAGE_TRANSFORM );
+
+		Add( PREFIX_ACTION + "copypos", "#STR_COT_ESP_MODULE_MENU_COPY_POS", JMConstants.Lucide( "copy" ) );
+		Add( PREFIX_ACTION + "copyori", "#STR_COT_ESP_MODULE_MENU_COPY_ORI", JMConstants.Lucide( "compass" ) );
+	}
+
+	protected void BuildTransformPaste()
+	{
+		AddBack( PAGE_TRANSFORM );
+
+		bool canMove = Perm( JMConstants.PERM_ESP_OBJECT_SETPOSITION );
+		bool canTurn = Perm( JMConstants.PERM_ESP_OBJECT_SETORIENTATION );
+
+		Add( PREFIX_ACTION + "pastepos", "#STR_COT_ESP_MODULE_MENU_PASTE_POS", JMConstants.Lucide( "clipboard-paste" ), canMove );
+		Add( PREFIX_ACTION + "pasteori", "#STR_COT_ESP_MODULE_MENU_PASTE_ORI", JMConstants.Lucide( "clipboard-paste" ), canTurn );
+	}
+
+	protected void BuildHealth()
+	{
+		AddBack();
+
+		bool canSet = Perm( JMConstants.PERM_ESP_OBJECT_SETHEALTH );
+
+		Add( PREFIX_ACTION + "health:100", "#STR_COT_ESP_MODULE_MENU_FULL", JMConstants.Lucide( "heart-pulse" ), canSet );
+		Add( PREFIX_ACTION + "health:75", "75%", "", canSet );
+		Add( PREFIX_ACTION + "health:50", "50%", "", canSet );
+		Add( PREFIX_ACTION + "health:25", "25%", "", canSet );
+		Add( PREFIX_ACTION + "health:0", "#STR_COT_ESP_MODULE_MENU_RUIN", "", canSet, JMTheme.DANGER );
+
+		//! "All" because DoHeal always heals attachments and cargo recursively
+		//! (HealEntityRecursive's defaults) - unlike the player manager's own
+		//! Heal, which only reaches them with a separate permission.
+		if ( m_Meta.target.IsInherited( Man ) || m_Meta.target.IsInherited( DayZCreature ) )
+			Add( PREFIX_ACTION + "heal", "#STR_COT_ESP_MODULE_MENU_HEAL_ALL", JMConstants.Lucide( "heart-pulse" ), Perm( JMConstants.PERM_ESP_OBJECT_HEAL ) );
+		else
+			Add( PREFIX_ACTION + "heal", "#STR_COT_PLAYER_MODULE_ACTION_REPAIR", JMConstants.Lucide( "wrench" ), Perm( JMConstants.PERM_ESP_OBJECT_HEAL ) );
+
+		if ( HasEmptyAttachmentSlots( EntityAI.Cast( m_Meta.target ) ) )
+			Add( PREFIX_ACTION + "repairfill", "#STR_COT_ESP_MODULE_MENU_REPAIR_FILL", JMConstants.Lucide( "wrench" ), Perm( JMConstants.PERM_ESP_OBJECT_HEAL ) );
+	}
+
+	protected void BuildQuantity()
+	{
+		AddBack();
+
+		bool canSet = Perm( JMConstants.PERM_ESP_OBJECT_SETQUANTITY );
+
+		Add( PREFIX_ACTION + "quantity:100", "#STR_COT_ESP_MODULE_MENU_FULL", JMConstants.Lucide( "package" ), canSet );
+		Add( PREFIX_ACTION + "quantity:75", "75%", "", canSet );
+		Add( PREFIX_ACTION + "quantity:50", "50%", "", canSet );
+		Add( PREFIX_ACTION + "quantity:25", "25%", "", canSet );
+		Add( PREFIX_ACTION + "quantity:0", "#STR_COT_ESP_MODULE_MENU_EMPTY", "", canSet );
+	}
+
+	protected void BuildLiquid()
+	{
+		AddBack();
+
+		bool canSet = Perm( JMConstants.PERM_ESP_OBJECT_SETLIQUID );
+
+		array<string> names = LiquidNames();
+		array<int> values = LiquidValues();
+
+		for ( int i = 0; i < names.Count(); ++i )
+			Add( PREFIX_ACTION + "liquid:" + values[i].ToString(), names[i], "", canSet );
+	}
+
+	protected void BuildFood()
+	{
+		AddBack();
+
+		bool canSet = Perm( JMConstants.PERM_ESP_OBJECT_SETFOODSTAGE );
+
+		array<string> names = FoodStageNames();
+		array<int> values = FoodStageValues();
+
+		for ( int i = 0; i < names.Count(); ++i )
+			Add( PREFIX_ACTION + "food:" + values[i].ToString(), names[i], "", canSet );
+	}
+
+	protected void BuildLock( string page = PAGE_MAIN )
+	{
+		string label = GetUniqueAttachmentLabel( m_LockItem );
+
+		AddBack( page, label );
+
+		if ( m_LockItem.COT_IsLocked() )
+			Add( PREFIX_ACTION + "unlock", "#STR_COT_ESP_MODULE_MENU_UNLOCK", JMConstants.Lucide( "lock-open" ), Perm( JMConstants.PERM_ESP_OBJECT_LOCK ) );
+		else if ( m_LockItem.COT_CanBeLocked() )
+			Add( PREFIX_ACTION + "lock", "#STR_COT_ESP_MODULE_MENU_LOCK", JMConstants.Lucide( "lock" ), Perm( JMConstants.PERM_ESP_OBJECT_LOCK ) );
+
+		//! The same two verbs over every lock standing near this one. A base is
+		//! a dozen separate entities, so "lock the base" cannot be addressed to
+		//! the gate the menu was opened on.
+		Add( PREFIX_ACTION + "lockall", "#STR_COT_ESP_MODULE_MENU_LOCK_ALL", JMConstants.Lucide( "lock" ), Perm( JMConstants.PERM_ESP_OBJECT_LOCK ) );
+		Add( PREFIX_ACTION + "unlockall", "#STR_COT_ESP_MODULE_MENU_UNLOCK_ALL", JMConstants.Lucide( "lock-open" ), Perm( JMConstants.PERM_ESP_OBJECT_LOCK ) );
+
+		if ( m_LockItem.COT_HasCode() )
+			Add( PREFIX_ACTION + "getcode", "#STR_COT_ESP_MODULE_ACTION_GET_CODE", JMConstants.ICON_STACK, Perm( JMConstants.PERM_ESP_OBJECT_GETCODE ) );
+
+		if ( m_LockItem.COT_CanSetCode() )
+		{
+			if ( m_LockItem.COT_CanResetCode() )
+				Add( PREFIX_ACTION + "resetcode", "#STR_COT_ESP_MODULE_MENU_RESET_CODE", JMConstants.Lucide( "rotate-ccw" ), Perm( JMConstants.PERM_ESP_OBJECT_SETCODE ) );
+
+			Add( PREFIX_ACTION + "pastecode", "#STR_COT_ESP_MODULE_MENU_PASTE_CODE", JMConstants.Lucide( "clipboard-paste" ), Perm( JMConstants.PERM_ESP_OBJECT_SETCODE ) );
+			Add( PREFIX_ACTION + "setcode", "#STR_COT_ESP_MODULE_MENU_SET_CODE", JMConstants.Lucide( "keyboard" ), Perm( JMConstants.PERM_ESP_OBJECT_SETCODE ) );
+		}
+	}
+
+	protected void BuildConstruction()
+	{
+		AddBack();
+
+		map< string, ref JMConstructionPartData > parts = m_Meta.GetConstructionParts();
+
+		if ( !parts )
+			return;
+
+		//! The two whole-object verbs, above the per-part rows they save.
+		//! Dismantling everything takes the base part with it, which deletes the
+		//! object - so it is tinted like the other things that cannot be undone.
+		Add( PREFIX_ACTION + "buildall", "#STR_COT_ESP_MODULE_MENU_BUILD_ALL", JMConstants.Lucide( "construction" ), Perm( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_BUILD ) );
+		Add( PREFIX_ACTION + "dismantleall", "#STR_COT_ESP_MODULE_MENU_DISMANTLE_ALL", JMConstants.Lucide( "pickaxe" ), Perm( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_DISMANTLE ), JMTheme.DANGER );
+		Add( PREFIX_ACTION + "repairall", "#STR_COT_ESP_MODULE_MENU_REPAIR_ALL", JMConstants.Lucide( "wrench" ), Perm( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_REPAIR ) );
+
+		ConstructionBase construction = JMESPModule.GetConstructionOf( m_Meta.target );
+
+	#ifndef DAYZ_1_29
+		//! A rebuildable building narrows this page to the part under the click,
+		//! so where to click is worth seeing. Client-side drawing only - nothing
+		//! is sent, so there is no permission to check.
+		if ( Rebuilding.Cast( construction ) )
+			AddToggle( PREFIX_ACTION + "shownodes", "#STR_COT_ESP_MODULE_MENU_SHOW_NODES", m_Meta.module.GetConstructionPreview().IsShowingNodes( EntityAI.Cast( m_Meta.target ) ) );
+	#endif
+
+		TStringStringMap labelsByPartName = new TStringStringMap;
+		TStringArray displayNames = {};
+		TStringArray partNames = {};
+		TStringArray labels = {};
+
+		foreach ( JMConstructionPartData partData: parts )
+		{
+			partNames.Insert( partData.m_Name );
+			InsertUnique( labels, partData.m_Name, partData.m_DisplayName, partNames, displayNames );
+		}
+
+		//! Need to do 2md iteration since old labels may get swapped for partName by InsertUnique in 1st iteration
+		//! which would lead to stale labels in labelsByPartName
+		for ( int i = 0; i < partNames.Count(); ++i )
+		{
+			labelsByPartName[partNames[i]] = labels[i];
+		}
+
+		//! We sort by classname since that will make rebuildable buildings show entries in a sensible order.
+		//! Another option could be using ConstructionBase::GetConstructionPartArray() which is the order from config.cpp
+		//! Will need to see which one works best.
+		JMStatics.SortStringArrayIgnoreCase( partNames );
+
+		m_FilteredParts = GetConstructionPartsFiltered();
+
+		foreach ( string partName: partNames )
+		{
+			JMConstructionPartData part;
+
+			if ( !m_FilteredParts.Find( partName, part ) )
+				continue;
+
+			string label = labelsByPartName[partName];
+
+			if ( part.m_State != JMConstructionPartState.BUILT )
+				AddBuildPart( partName, label );
+			else
+				AddPage( PAGE_PART + ":" + partName, label, JMConstants.Lucide( "hammer" ) );
+		}
+	}
+
+	map< string, ref JMConstructionPartData > GetConstructionPartsFiltered()
+	{
+		map< string, ref JMConstructionPartData > parts = m_Meta.GetConstructionParts();
+		map< string, ref JMConstructionPartData > filteredParts = new map< string, ref JMConstructionPartData >;
+
+		if ( parts )
+		{
+			//! Narrowed to the part the right-click landed on when it landed on one;
+			//! a rebuildable building has dozens. A click on nothing that names a part
+			//! (or a name no part answers to) lists everything rather than nothing.
+			string filter;
+			bool filtered = CheckConstructionPartsFilter( filter );
+
+			foreach ( string partName, JMConstructionPartData part: parts )
+			{
+				if ( filtered && !PartMatchesFilter( part, filter ) )
+					continue;
+
+				//! A part that conflicts with something already built cannot be
+				//! acted on at all, so it is not offered a page.
+				if ( part.m_State != JMConstructionPartState.CONFLICTING_PART )
+					filteredParts[partName] = part;
+			}
+		}
+
+		return filteredParts;
+	}
+
+	protected bool CheckConstructionPartsFilter( out string filter )
+	{
+		if ( m_PartFilter != "" )
+		{
+			map< string, ref JMConstructionPartData > parts = m_Meta.GetConstructionParts();
+
+			if ( parts )
+			{
+				filter = m_PartFilter;
+				filter.ToLower();
+
+				//! Only filter parts if at least one part DOES match the filter
+				foreach ( string partName, JMConstructionPartData part: parts )
+				{
+					if ( PartMatchesFilter( part, filter ) )
+						return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	protected bool PartMatchesFilter( JMConstructionPartData part, string lowerFilter )
+	{
+		string mainName = part.m_MainPartName;
+		mainName.ToLower();
+
+		string name = part.m_Name;
+		name.ToLower();
+
+		return mainName == lowerFilter || name == lowerFilter;
+	}
+
+	bool ConstructionPartsChanged()
+	{
+		if ( m_FilteredParts )
+		{
+			map< string, ref JMConstructionPartData > filteredParts = GetConstructionPartsFiltered();
+
+			if ( filteredParts.Count() != m_FilteredParts.Count() )
+				return true;
+
+			foreach ( string partName, JMConstructionPartData partData: filteredParts )
+			{
+				JMConstructionPartData prevPartData;
+				if ( !m_FilteredParts.Find( partName, prevPartData ) || prevPartData.m_State != partData.m_State )
+					return true;
+			}
+		}
+
+		return false;
+	}
+
+	protected void BuildPart()
+	{
+		AddBack( PAGE_BUILD );
+
+		map< string, ref JMConstructionPartData > parts = m_Meta.GetConstructionParts();
+
+		if ( !parts || !parts.Contains( m_PageArg ) )
+			return;
+
+		JMConstructionPartData part = parts.Get( m_PageArg );
+
+		bool built = part.m_State == JMConstructionPartState.BUILT;
+
+		if ( built )
+		{
+			Add( PREFIX_ACTION + "dismantle", "#STR_COT_ESP_MODULE_MENU_DISMANTLE", JMConstants.Lucide( "hammer" ), Perm( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_DISMANTLE ) );
+			Add( PREFIX_ACTION + "repairpart", "#STR_COT_ESP_MODULE_MENU_REPAIR", JMConstants.Lucide( "wrench" ), Perm( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_REPAIR ) );
+
+			//! Carries the part name forward as its own argument: the health
+			//! page is a page like any other and has no memory of which row
+			//! opened it.
+			AddPage( PAGE_PARTHP + ":" + m_PageArg, "#STR_COT_ESP_MODULE_PAGE_PART_HEALTH", JMConstants.Lucide( "heart-pulse" ), Perm( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_SETHEALTH ) );
+		}
+		else
+		{
+			AddBuildPart( m_PageArg, part.m_DisplayName );
+		}
+	}
+
+	protected void AddBuildPart( string partName, string partDisplayName )
+	{
+		string label;
+		int color;
+
+		EntityAI entity = EntityAI.Cast( m_Meta.target );
+		ConstructionBase construction = ConstructionBase.Cast( entity.GetConstructionBasic() );
+		if ( JMPermissions.Has( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_BUILD_MATERIALSNOTREQUIRED ) || construction.COT_CanBuildPart( partName, true ) )
+		{
+			label = string.Format( "#STR_COT_ESP_MODULE_MENU_BUILD %1", partDisplayName );
+		}
+		else
+		{
+			label = string.Format( "#STR_COT_ESP_MODULE_MENU_BUILD %1 #STR_COT_ESP_MODULE_MENU_BUILD_MATERIALS_MISSING", partDisplayName );
+			color = JMTheme.DANGER;
+		}
+
+		Add( PREFIX_ACTION + "build:" + partName, label, JMConstants.Lucide( "hammer" ), Perm( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_BUILD ), color );
+	}
+
+	protected void BuildVehicle()
+	{
+		AddBack();
+
+		//! Fuel and coolant are pages of fractions rather than one "fill it"
+		//! row: an admin setting up a scenario wants a car with a quarter tank
+		//! as often as a full one, and there was no way to ask for that.
+		AddPage( PAGE_FUEL, "#STR_COT_ESP_MODULE_PAGE_FUEL", JMConstants.Lucide( "fuel" ), Perm( JMConstants.PERM_ESP_OBJECT_CAR_REFUEL ) );
+
+		//! Motorbike excluded - it has no coolant tank (see
+		//! MotorbikeScript.c's COT_Refuel note).
+		if ( m_Meta.target.IsInherited( CarScript ) )
+			AddPage( PAGE_COOLANT, "#STR_COT_ESP_MODULE_PAGE_COOLANT", JMConstants.Lucide( "thermometer" ), Perm( JMConstants.PERM_ESP_OBJECT_CAR_REFUEL ) );
+
+		//! Trains run on rails and have nothing to be unstuck from.
+	#ifndef DAYZ_1_29
+		if ( m_Meta.target.IsInherited( CarScript ) || m_Meta.target.IsInherited( BoatScript ) || m_Meta.target.IsInherited( Motorbike ) )
+	#else
+		if ( m_Meta.target.IsInherited( CarScript ) || m_Meta.target.IsInherited( BoatScript ) )
+	#endif
+			Add( PREFIX_ACTION + "unstuck", "#STR_COT_ESP_MODULE_MENU_UNSTUCK", JMConstants.Lucide( "life-buoy" ), Perm( JMConstants.PERM_ESP_OBJECT_CAR_UNSTUCK ) );
+
+		Add( PREFIX_ACTION + "heal", "#STR_COT_PLAYER_MODULE_ACTION_REPAIR", JMConstants.Lucide( "wrench" ), Perm( JMConstants.PERM_ESP_OBJECT_HEAL ) );
+
+		if ( COT.AreWheelsLocked( m_Meta.target ) )
+			Add( PREFIX_ACTION + "unlockwheels", "#STR_COT_ESP_MODULE_MENU_UNLOCK_WHEELS", JMConstants.Lucide( "lock-open" ), Perm( JMConstants.PERM_ESP_OBJECT_CAR_LOCKWHEELS ) );
+		else
+			Add( PREFIX_ACTION + "lockwheels", "#STR_COT_ESP_MODULE_MENU_LOCK_WHEELS", JMConstants.Lucide( "lock" ), Perm( JMConstants.PERM_ESP_OBJECT_CAR_LOCKWHEELS ) );
+
+		CarScript carScript = CarScript.Cast( m_Meta.target );
+		if ( carScript )
+		{
+			if ( carScript.COT_AreCarDoorsOpen() )
+				Add( PREFIX_ACTION + "closecardoors", "#STR_COT_ESP_MODULE_MENU_CLOSE_CAR_DOORS", JMConstants.Lucide( "car" ), Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+			else
+				Add( PREFIX_ACTION + "opencardoors", "#STR_COT_ESP_MODULE_MENU_OPEN_CAR_DOORS", JMConstants.Lucide( "car" ), Perm( JMConstants.PERM_ESP_OBJECT_OPENCLOSE ) );
+		}
+
+		if ( HasEmptyAttachmentSlots( EntityAI.Cast( m_Meta.target ) ) )
+			Add( PREFIX_ACTION + "repairfill", "#STR_COT_ESP_MODULE_MENU_REPAIR_FILL", JMConstants.Lucide( "wrench" ), Perm( JMConstants.PERM_ESP_OBJECT_HEAL ) );
+
+	#ifdef EXPANSIONMODVEHICLE
+		//! Expansion used to bolt these onto the ESP tag itself with its own
+		//! meta override. That hook is gone, so they are offered here and go
+		//! through JMVehiclesModule - same permissions, logging and webhooks as
+		//! the vehicle manager's own buttons.
+		ExpansionVehicle vehicle;
+		if ( ExpansionVehicle.Get( vehicle, EntityAI.Cast( m_Meta.target ) ) && vehicle.HasKey() )
+		{
+			if ( vehicle.IsLocked() )
+				Add( PREFIX_ACTION + "vehunlock", "#STR_COT_ESP_MODULE_MENU_UNLOCK", JMConstants.Lucide( "lock-open" ), Perm( JMConstants.PERM_VEHICLES_LOCK ) );
+			else
+				Add( PREFIX_ACTION + "vehunlock", "#STR_COT_ESP_MODULE_MENU_LOCK", JMConstants.Lucide( "lock" ), Perm( JMConstants.PERM_VEHICLES_LOCK ) );
+
+			Add( PREFIX_ACTION + "vehunpair", "#STR_COT_ESP_MODULE_MENU_UNPAIR", JMConstants.Lucide( "key-round" ), Perm( JMConstants.PERM_VEHICLES_UNPAIR ) );
+		}
+	#endif
+	}
+
+	protected void BuildFuel()
+	{
+		AddBack( PAGE_VEHICLE );
+
+		bool canSet = Perm( JMConstants.PERM_ESP_OBJECT_CAR_REFUEL );
+
+		AddPercentRows( "fuel", "#STR_COT_ESP_MODULE_MENU_FULL", "#STR_COT_ESP_MODULE_MENU_EMPTY", JMConstants.Lucide( "fuel" ), canSet );
+
+		//! The old Refuel, kept as one row: it tops up oil and brake fluid as
+		//! well, which no per-fluid page above ever will.
+		Add( PREFIX_ACTION + "refuel", "#STR_COT_ESP_MODULE_MENU_REFUEL_ALL", JMConstants.Lucide( "droplets" ), canSet );
+	}
+
+	protected void BuildCoolant()
+	{
+		AddBack( PAGE_VEHICLE );
+
+		AddPercentRows( "coolant", "#STR_COT_ESP_MODULE_MENU_FULL", "#STR_COT_ESP_MODULE_MENU_EMPTY", JMConstants.Lucide( "thermometer" ), Perm( JMConstants.PERM_ESP_OBJECT_CAR_REFUEL ) );
+	}
+
+	//! How far up the mast the flag sits. A percentage rather than raise/lower because that is
+	//! what the pole stores (vanilla's raise moves one step at a time) and the refresher time
+	//! it carries moves with it.
+	protected void BuildFlag()
+	{
+		AddBack();
+
+		bool canSet = Perm( JMConstants.PERM_ESP_OBJECT_FLAG );
+
+		//! A pole with no flag on it has nothing to raise. Greyed rather than
+		//! dropped so the rows do not move between one opening and the next.
+		EntityAI pole = EntityAI.Cast( m_Meta.target );
+
+		if ( pole && !pole.FindAttachmentBySlotName( "Material_FPole_Flag" ) )
+			canSet = false;
+
+		AddPercentRows( "flag", "#STR_COT_ESP_MODULE_MENU_FLAG_RAISED", "#STR_COT_ESP_MODULE_MENU_FLAG_LOWERED", JMConstants.Lucide( "flag" ), canSet );
+	}
+
+	//! Damage one built part without dismantling it. Percentages rather than hit points:
+	//! every part and material tier has a different maximum.
+	protected void BuildPartHealth()
+	{
+		AddBack( PAGE_PART + ":" + m_PageArg );
+
+		bool canSet = Perm( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_SETHEALTH );
+
+		Add( PREFIX_ACTION + "parthp:100", "#STR_COT_ESP_MODULE_MENU_FULL", JMConstants.Lucide( "heart-pulse" ), canSet );
+		Add( PREFIX_ACTION + "parthp:75", "75%", "", canSet );
+		Add( PREFIX_ACTION + "parthp:50", "50%", "", canSet );
+		Add( PREFIX_ACTION + "parthp:25", "25%", "", canSet );
+		Add( PREFIX_ACTION + "parthp:0", "#STR_COT_ESP_MODULE_MENU_RUIN", "", canSet, JMTheme.DANGER );
+	}
+
+	//! Everything that can be done to a firearm lying in the world. The jam row reports its
+	//! state because a weapon syncs that flag; the chamber rows do not, as a client cannot
+	//! read chamber contents off an object it is not holding.
+	protected void BuildWeapon()
+	{
+		AddBack();
+
+		Weapon_Base weapon;
+
+		if ( !Class.CastTo( weapon, m_Meta.target ) )
+			return;
+
+		bool canSet = Perm( JMConstants.PERM_ESP_OBJECT_WEAPON );
+
+		AddToggle( PREFIX_ACTION + "jam", "#STR_COT_ESP_MODULE_ACTION_JAMMED", weapon.IsJammed(), canSet );
+
+		if ( weapon.IsChamberFull( 0 ) )
+			Add( PREFIX_ACTION + "unchamber", "#STR_COT_ESP_MODULE_MENU_UNCHAMBER", JMConstants.Lucide( "circle" ), canSet );
+		else
+			Add( PREFIX_ACTION + "chamber", "#STR_COT_ESP_MODULE_MENU_CHAMBER", JMConstants.Lucide( "circle-dot" ), canSet );
+
+		//! A weapon takes a detachable magazine or holds its rounds itself; offering both would
+		//! put a dead row on every gun. Exec_LoadMagazine refills an already-attached magazine
+		//! instead of stacking a second, so the same check runs client-side and the row reads
+		//! "Refill" instead of "Attach" when that is what it will do.
+		if ( WeaponAcceptsMagazine( weapon ) )
+		{
+			if ( WeaponHasMagazineAttached( weapon ) )
+				Add( PREFIX_ACTION + "loadmag", "#STR_COT_ESP_MODULE_MENU_REFILL_MAG", JMConstants.Lucide( "package-plus" ), canSet );
+			else
+				Add( PREFIX_ACTION + "loadmag", "#STR_COT_ESP_MODULE_MENU_LOAD_MAG", JMConstants.Lucide( "package-plus" ), canSet );
+		}
+		else if ( weapon.HasInternalMagazine( -1 ) )
+			Add( PREFIX_ACTION + "fillinternal", "#STR_COT_ESP_MODULE_MENU_FILL_INTERNAL", JMConstants.Lucide( "layers-plus" ), canSet );
+
+		//! "Repair & Fill Slots" removed on purpose: Refill/Attach Magazine above is the ammo-filling
+		//! action, and a Repair row that also filled the empty magazine slot was redundant.
+		//! The Attachments page is offered from BuildMain, not here: it is not weapon-specific
+		//! (vehicles and clothing have slots too).
+	}
+
+	//! One row per attachment slot the target's model declares, whether or
+	//! not something currently fills it - an empty slot is exactly where
+	//! "add" belongs, and CoT has no other way to discover slot names.
+	protected void BuildAttachments()
+	{
+		AddBack();
+
+		TStringIntMap slotIdsByLabel = new TStringIntMap;
+		map<int, EntityAI> attachmentsById = new map<int, EntityAI>;
+		TStringArray labels = GetSlotLabels( slotIdsByLabel, attachmentsById );
+
+		JMStatics.SortStringArrayIgnoreCase( labels );
+
+		foreach ( string label: labels )
+		{
+			int slotId = slotIdsByLabel[label];
+
+			EntityAI attached = attachmentsById[slotId];
+
+			if ( attached )
+			{
+				string attLabel = GetUniqueAttachmentLabel( attached );
+				string displayName = attached.GetDisplayName();
+
+				if ( attLabel != displayName )
+					label = attLabel;
+				else if ( displayName != label )
+					label += ": " + displayName;
+			}
+			else
+			{
+				string slotDisplayName = InventorySlots.GetSlotDisplayName( slotId );
+				string doorLabel = GetRelatedDoorLabel( slotDisplayName, slotId );
+
+				if ( doorLabel != slotDisplayName )
+					label = doorLabel;
+
+				label += ": #STR_COT_ESP_MODULE_ATTACH_EMPTY";
+			}
+
+			AddPage( PAGE_ATTACH_SLOT + ":" + slotId, label, JMConstants.Lucide( "puzzle" ), true );
+		}
+	}
+
+	//! Label including slot, attachment displayname, and stacked quantity (if applicable)
+	string GetUniqueAttachmentLabel( EntityAI attachment )
+	{
+		string label;
+		int slotCandidatesCount;
+
+		if ( m_Meta.m_DoorIndex == -1 && m_Meta.target.IsBuilding() )
+		{
+			TStringArray invSlots = g_Game.COT_GetInventorySlots( attachment );
+
+			EntityAI target;
+			if ( invSlots.Count() > 0 && Class.CastTo( target, m_Meta.target ) )
+			{
+				TStringArray attSlots = {};
+				target.ConfigGetTextArray( "attachments", attSlots );
+
+				foreach ( string attSlotName: attSlots )
+				{
+					attSlotName.ToLower();
+
+					foreach ( string invSlotName: invSlots )
+					{
+						invSlotName.ToLower();
+
+						if ( attSlotName == invSlotName )
+						{
+							++slotCandidatesCount;
+
+							if ( slotCandidatesCount > 1 )
+								break;
+						}
+					}
+
+					if ( slotCandidatesCount > 1 )
+						break;
+				}
+			}
+		}
+
+		auto il = new InventoryLocation();
+		attachment.GetInventory().GetCurrentInventoryLocation( il );
+
+		int slotId = il.GetSlot();
+		string attDisplayName = attachment.GetDisplayName();
+		string doorLabel = GetRelatedDoorLabel( attDisplayName, slotId );
+
+		if ( slotCandidatesCount > 1 )
+		{
+			if ( doorLabel == attDisplayName )
+			{
+				string slotName = InventorySlots.GetSlotName( slotId );
+				label = string.Format( "%1: %2", slotName, attDisplayName );
+			}
+			else
+				label = doorLabel;
+		}
+		else
+		{
+			label = doorLabel;
+		}
+
+		if ( attachment.HasQuantity() && attachment.ConfigGetString( "stackedUnit" ) == "pc." )
+			label += string.Format(" %1/%2", attachment.GetQuantity(), attachment.GetQuantityMax());
+
+		return label;
+	}
+
+	string GetRelatedDoorLabel( string label, int slotId )
+	{
+		BuildingBase building;
+		if ( Class.CastTo( building, m_Meta.target ) )
+		{
+			string slotName = InventorySlots.GetSlotName( slotId );
+			string slotNameLower = slotName;
+			slotNameLower.ToLower();
+
+			for ( int doorIndex = 0; doorIndex < building.GetDoorCount(); ++doorIndex )
+			{
+				AdditionalDoorInfo doorInfo = building.GetDoorInfo( doorIndex );
+
+				if ( doorInfo && doorInfo.m_RelatedInventorySlotNames )
+				{
+					foreach ( string relatedSlotName : doorInfo.m_RelatedInventorySlotNames )
+					{
+						string relatedSlotNameLower = relatedSlotName;
+						relatedSlotNameLower.ToLower();
+
+						if ( relatedSlotNameLower == slotNameLower )
+							return string.Format( "%1 (#STR_COT_DOOR %2)", label, GetDoorPartNumber( doorIndex, relatedSlotName ) );
+					}
+				}
+			}
+		}
+
+		return label;
+	}
+
+	TStringArray GetSlotLabels( TStringIntMap slotIdsByLabel = null, map<int, EntityAI> attachmentsById = null )
+	{
+		TStringArray labels = {};
+
+		EntityAI target;
+		if ( !Class.CastTo( target, m_Meta.target ) || !target.GetInventory() )
+			return labels;
+
+		Man player = Man.Cast( target );
+
+		GameInventory inventory = target.GetInventory();
+
+		int count = inventory.GetAttachmentSlotsCount();
+		int slotId;
+		string partName;
+		string filter;
+		bool filtered = CheckConstructionPartsFilter( filter );
+
+		map< string, ref JMConstructionPartData > parts = m_Meta.GetConstructionParts();
+		JMConstructionPartData part;
+
+		TStringArray slotNames = {};
+		TStringArray displayNames = {};
+
+		for ( int i = 0; i < count; i++ )
+		{
+			slotId = inventory.GetAttachmentSlotId( i );
+			if ( slotId == InventorySlots.INVALID || !InventorySlots.GetShowForSlotId( slotId ) )
+				continue;
+
+			if ( !target.CanDisplayAttachmentSlot( slotId ) )
+				continue;
+
+			string slotName = InventorySlots.GetSlotName( slotId );
+
+			if ( !IsAttachmentSlotAccessible( target, slotName, partName ) )
+				continue;
+
+			if ( filtered && partName && parts.Find( partName, part ) && !PartMatchesFilter( part, filter ) )
+				continue;
+
+			EntityAI attached;
+
+			if ( slotId == InventorySlots.HANDS && player )
+				attached = player.GetEntityInHands();
+			else
+				attached = inventory.FindAttachment( slotId );
+
+			if ( attached )
+			{
+				if ( ( attached.GetFlags() & EntityFlags.VISIBLE ) == 0 )
+					continue;  //! Ignore slot if attached entity is invisible
+
+				if ( attachmentsById )
+					attachmentsById[slotId] = attached;
+			}
+
+			string displayName = InventorySlots.GetSlotDisplayName( slotId );
+
+			if ( displayName == "#STR_CodeLock0" )  //! I have no idea where it pulls that from but it's not vanilla nor Expansion
+				displayName = "#STR_CfgVehicles_codelock0";
+
+			displayName = Widget.TranslateString( displayName );
+
+			slotNames.Insert( slotName );
+
+			string uniqueLabel = InsertUnique( labels, slotName, displayName, slotNames, displayNames, slotIdsByLabel );
+
+			if ( slotIdsByLabel )
+				slotIdsByLabel[uniqueLabel] = slotId;
+		}
+
+		return labels;
+	}
+
+	//! m_PageArg is the slot id (see BuildAttachments) - "Remove" only shows
+	//! when something is actually there to remove, same reasoning as every
+	//! other conditional row in this menu.
+	protected void BuildAttachSlot( string page = PAGE_ATTACHMENTS )
+	{
+		EntityAI target;
+
+		EntityAI existing;
+
+		if ( Class.CastTo( target, m_Meta.target ) && target.GetInventory() && m_PageArg != "" )
+		{
+			int slotId = m_PageArg.ToInt();
+
+			bool canSet = Perm( JMConstants.PERM_ESP_OBJECT_SETATTACHMENT );
+
+			Man player = Man.Cast( m_Meta.target );
+
+			if ( slotId == InventorySlots.HANDS && player )
+				existing = player.GetEntityInHands();
+			else
+				existing = target.GetInventory().FindAttachment( slotId );
+
+			m_LockItem = JMLockItem.Get( existing, m_Meta.m_DoorIndex );
+
+			if ( existing )
+			{
+				if ( m_LockItem && m_LockItem.COT_CanInteract() )
+				{
+					BuildLock( page );
+					m_Menu.AddDivider();
+				}
+				else
+				{
+					string attLabel = GetUniqueAttachmentLabel( existing );
+					AddBack( page, string.Format( "#STR_COT_ESP_MODULE_PAGE_ATTACHMENTS   ‹   %1", attLabel ) );
+				}
+			}
+			else
+			{
+				AddBack( page );
+			}
+		}
+		else
+		{
+			AddBack( page );
+			return;
+		}
+
+		if ( existing )
+			Add( PREFIX_ACTION + "removeattach", "#STR_COT_ESP_MODULE_MENU_REMOVE", JMConstants.Lucide( "trash-2" ), canSet, JMTheme.DANGER );
+
+		array< string > candidateLabels = {};
+		TStringStringMap candidates = GetSlotCandidates( slotId, candidateLabels );
+
+	#ifdef DIAG_DEVELOPER
+	#ifdef DZ_Expansion_Core
+		EXTrace.Profile(true, this, "JMESPActionMenu::BuildAttachSlot -> foreach");
+	#endif
+	#endif
+
+		foreach ( string label: candidateLabels )
+		{
+			string className = candidates[label];
+			Add( PREFIX_ACTION + "setattach:" + className, label, JMConstants.Lucide( "puzzle" ), canSet );
+		}
+
+	#ifdef DIAG_DEVELOPER
+	#ifdef DZ_Expansion_Core
+		EXTrace.DumpProfilingData();
+	#endif
+	#endif
+	}
+
+	//! A fireplace's whole lifecycle. Refuel is listed above ignite on purpose: a fire with
+	//! nothing to burn goes out on its first heating tick, so lighting an empty one looks
+	//! like the button did nothing.
+	protected void BuildFire()
+	{
+		AddBack();
+
+		FireplaceBase fireplace;
+
+		if ( !Class.CastTo( fireplace, m_Meta.target ) )
+			return;
+
+		bool canSet = Perm( JMConstants.PERM_ESP_OBJECT_FIREPLACE );
+
+		Add( PREFIX_ACTION + "firefuel", "#STR_COT_ESP_MODULE_MENU_ADD_FUEL", JMConstants.Lucide( "logs" ), canSet );
+
+		if ( fireplace.IsBurning() )
+			Add( PREFIX_ACTION + "extinguish", "#STR_COT_ESP_MODULE_MENU_EXTINGUISH", JMConstants.Lucide( "flame-kindling" ), canSet );
+		else
+			Add( PREFIX_ACTION + "ignite", "#STR_COT_ESP_MODULE_MENU_IGNITE", JMConstants.Lucide( "flame" ), canSet );
+
+		Add( PREFIX_ACTION + "cookall", "#STR_COT_ESP_MODULE_MENU_COOK_ALL", JMConstants.Lucide( "utensils" ), canSet );
+
+		AddToggle( PREFIX_ACTION + "stones", "#STR_COT_ESP_MODULE_ACTION_STONE_CIRCLE", fireplace.HasStoneCircle(), canSet );
+		AddToggle( PREFIX_ACTION + "oven", "#STR_COT_ESP_MODULE_ACTION_OVEN", fireplace.IsOven(), canSet );
+	}
+
+	protected void BuildScale()
+	{
+		AddBack( PAGE_PLAYER );
+
+		bool canSet = Perm( JMConstants.PERM_PLAYER_SCALE );
+
+		TStringArray values = new TStringArray;
+		SCALE_VALUES.Split( "|", values );
+
+		for ( int i = 0; i < values.Count(); i++ )
+			Add( PREFIX_ACTION + "scale:" + values[i], values[i] + "x", "", canSet );
+	}
+
+	//! Reachable only when BuildMain already checked ESP.Object.ChangeColor
+	//! to offer this page at all, so every row in it is enabled outright.
+	protected void BuildColor()
+	{
+		AddBack();
+
+		EntityAI entity = EntityAI.Cast( m_Meta.target );
+
+		// Color is a whole-object property - a wheel or door opened this page
+		// as a sub-part, but painting is always done on the thing it belongs
+		// to, never the part itself.
+		if ( entity && entity.GetHierarchyRoot() )
+			entity = EntityAI.Cast( entity.GetHierarchyRoot() );
+
+		array<string> tokens = new array<string>;
+
+		JMObjectSpawnerModule objSpawner;
+		if ( entity && CF_Modules<JMObjectSpawnerModule>.Get( objSpawner ) )
+			tokens = objSpawner.GetAvailableColorVariants( entity );
+
+		if ( tokens.Count() == 0 )
+		{
+			Add( "", "#STR_COT_ESP_MODULE_MENU_NO_COLOR_VARIANTS", "", false );
+			return;
+		}
+
+		foreach ( string token: tokens )
+		{
+			int wireIndex = JMObjectSpawnerModule.GetColorTokenIndex( token );
+			string colorName = JMObjectSpawnerModule.s_ColorNamesByToken[token];
+			Add( PREFIX_ACTION + "changecolor:" + wireIndex, colorName, JMConstants.Lucide( "palette" ) );
+		}
+	}
+
+	protected void BuildCopy()
+	{
+		AddBack();
+
+		Add( PREFIX_ACTION + "copyclassname",       "#STR_COT_ESP_MODULE_MENU_CLASSNAME" + ": " +  m_Meta.targetType,       JMConstants.Lucide( "copy" ) );
+
+		if ( !m_Meta.target.IsPlainObject() && m_Meta.target.GetType() )
+		{
+			Add( PREFIX_ACTION + "copyclassnameatts", "#STR_COT_ESP_MODULE_MENU_COPY_CLASSNAMES", JMConstants.Lucide( "list-tree" ) );
+			Add( PREFIX_ACTION + "copyxml",       "#STR_COT_ESP_MODULE_MENU_COPY_XML",       JMConstants.Lucide( "code-xml" ) );
+			Add( PREFIX_ACTION + "copyspawnable", "#STR_COT_ESP_MODULE_MENU_COPY_SPAWNABLE", JMConstants.Lucide( "file-code" ) );
+			Add( PREFIX_ACTION + "copyexpansion", "#STR_COT_ESP_MODULE_EXPORT_MAP", JMConstants.Lucide( "map-pin" ) );
+#ifdef DZ_Expansion_Core
+			Add( PREFIX_ACTION + "copyloadout",   "#STR_COT_PLAYER_MODULE_RIGHT_PLAYER_QUICK_ACTIONS_EXPLOADOUT",   JMConstants.Lucide( "box" ) );
+#endif
+		}
+
+		if ( m_Meta.type )
+		{
+			string categoryLabel = "#STR_COT_ESP_MODULE_MENU_CATEGORY" + ": " + m_Meta.type.Localisation;
+			Add( PREFIX_ACTION + "copycategory", categoryLabel, JMConstants.Lucide( "tag" ) );
+		}
+
+		//! Locally spawned objects don't have a netID
+		if ( m_Meta.networkLow || m_Meta.networkHigh )
+		{
+			string netIdLabel = "#STR_COT_ESP_MODULE_MENU_NETWORK_ID" + ": " + m_Meta.networkLow.ToString() + " | " + m_Meta.networkHigh.ToString();
+			Add( PREFIX_ACTION + "copynetid", netIdLabel, JMConstants.Lucide( "hash" ) );
+		}
+	}
+
+	//! A player's own copy row - name, GUID, Steam64 - is identity data, not
+	//! the classname/xml/spawnable family BuildCopy holds, so it gets its own
+	//! page rather than being folded into that one.
+	protected void BuildCopyPlayer()
+	{
+		AddBack();
+
+		Add( PREFIX_ACTION + "copyname",  "#STR_COT_ESP_MODULE_MENU_COPY_NAME",  JMConstants.Lucide( "copy" ) );
+		Add( PREFIX_ACTION + "copyguid",  "#STR_COT_ESP_MODULE_MENU_COPY_GUID",  JMConstants.Lucide( "copy" ) );
+		Add( PREFIX_ACTION + "copysteam", "#STR_COT_ESP_MODULE_MENU_COPY_STEAM", JMConstants.Lucide( "copy" ) );
+	}
+
+	protected void BuildPlayer()
+	{
+		AddBack();
+
+		JMPlayerInstance instance = TargetPlayer();
+
+		if ( !instance )
+			return;
+
+		Add( PREFIX_ACTION + "heal", "#STR_COT_ESP_MODULE_MENU_HEAL_ALL", JMConstants.Lucide( "heart-pulse" ), Perm( JMConstants.PERM_ESP_OBJECT_HEAL ) );
+
+		//! These are player states the player module already owns, so they are
+		//! gated on ITS permissions and routed through it, webhooks and all.
+		AddToggle( PREFIX_ACTION + "uncon", "#STR_COT_ESP_MODULE_ACTION_UNCONSCIOUS", instance.IsUnconscious(), Perm( JMConstants.PERM_PLAYER_SET_SHOCK ) );
+		AddToggle( PREFIX_ACTION + "freeze", "#STR_COT_ESP_MODULE_ACTION_FREEZE", instance.IsFrozen(), Perm( JMConstants.PERM_PLAYER_FREEZE ) );
+		AddToggle( PREFIX_ACTION + "legs", "#STR_COT_ESP_MODULE_ACTION_BROKEN_LEGS", instance.HasBrokenLegs(), Perm( JMConstants.PERM_PLAYER_BROKENLEGS ) );
+#ifndef DAYZ_1_29
+		AddToggle( PREFIX_ACTION + "ragdoll", "#STR_COT_PLAYER_MODULE_ACTION_RAGDOLL", instance.IsRagdoll(), Perm( JMConstants.PERM_PLAYER_RAGDOLL ) );
+#endif
+
+		AddPage( PAGE_SCALE, "#STR_COT_ESP_MODULE_PAGE_SCALE", JMConstants.Lucide( "scaling" ), Perm( JMConstants.PERM_PLAYER_SCALE ) );
+		AddPage( PAGE_COPY_PLAYER, "#STR_COT_GENERIC_COPY", JMConstants.Lucide( "copy" ) );
+
+		//! A menu cannot be typed into, so the message body comes off the
+		//! clipboard - the same route the exact position and the exact lock code
+		//! already take.
+		Add( PREFIX_ACTION + "msg", "#STR_COT_ESP_MODULE_MENU_MESSAGE", JMConstants.Lucide( "message-square" ), Perm( JMConstants.PERM_PLAYER_MESSAGE ) );
+
+		//! Destructive, so tinted like delete is - the same bar this menu sets
+		//! everywhere else for something that cannot be taken back.
+		Add( PREFIX_ACTION + "clearcargo", "#STR_COT_PLAYER_MODULE_ACTION_CLEAR_CARGO", JMConstants.Lucide( "package-x" ), Perm( JMConstants.PERM_PLAYER_CLEARCARGO ), JMTheme.DANGER );
+		Add( PREFIX_ACTION + "strip", "#STR_COT_PLAYER_MODULE_ACTION_STRIP", JMConstants.Lucide( "shirt" ), Perm( JMConstants.PERM_PLAYER_STRIP ), JMTheme.DANGER );
+		Add( PREFIX_ACTION + "kick", "#STR_COT_PLAYER_MODULE_ACTION_KICK", JMConstants.Lucide( "door-open" ), Perm( JMConstants.PERM_PLAYER_KICK ), JMTheme.DANGER );
+		Add( PREFIX_ACTION + "ban", "#STR_COT_PLAYER_MODULE_ACTION_BAN", JMConstants.Lucide( "gavel" ), Perm( JMConstants.PERM_PLAYER_BAN ), JMTheme.DANGER );
+	}
+
+	// =========================================================================
+	//  Routing
+	// =========================================================================
+
+	void OnMenuClick( UIEvent eid, UIActionBase action )
+	{
+		if ( eid != UIEvent.CLICK )
+			return;
+
+		if ( !m_Meta || !m_Meta.target )
+			return;
+
+		string id = m_Menu.GetLastClickedId();
+
+		if ( id.IndexOf( PREFIX_PAGE ) == 0 )
+		{
+			GoToPage( id.Substring( 2, id.Length() - 2 ) );
+			return;
+		}
+
+		if ( id.IndexOf( PREFIX_ACTION ) != 0 )
+			return;
+
+		RunAction( id.Substring( 2, id.Length() - 2 ), action );
+	}
+
+	//! Draws what a construction row acts on while the pointer rests on it, and
+	//! nothing once it leaves (`id` is then ""). Every other row clears it.
+	void OnMenuHover( string id )
+	{
+		if ( !m_Meta || !m_Meta.target )
+			return;
+
+		JMConstructionPreview preview = m_Meta.module.GetConstructionPreview();
+		preview.ClearPreview();
+
+		EntityAI target = EntityAI.Cast( m_Meta.target );
+		map< string, ref JMConstructionPartData > parts = m_Meta.GetConstructionParts();
+
+		if ( !target || !parts )
+			return;
+
+		TStringArray partNames = new TStringArray;
+		JMConstructionPartData part;
+
+		if ( m_Page == PAGE_BUILD )
+		{
+			string partPage = PREFIX_PAGE + PAGE_PART + ":";
+			string buildAction = PREFIX_ACTION + "build:";
+			string partName;
+
+			if ( id.IndexOf( partPage ) == 0 )
+				partName = id.Substring( partPage.Length(), id.Length() - partPage.Length() );
+			else if ( id.IndexOf( buildAction ) == 0 )
+				partName = id.Substring( buildAction.Length(), id.Length() - buildAction.Length() );
+
+			if ( partName )
+			{
+				part = parts.Get( partName );
+
+				if ( !part )
+					return;
+
+				partNames.Insert( partName );
+
+				if ( part.m_State == JMConstructionPartState.BUILT )
+					preview.PreviewParts( target, partNames );
+				else
+					preview.PreviewBuild( target, partNames );
+			}
+			else if ( id == PREFIX_ACTION + "buildall" )
+			{
+				//! The same parts Exec_BuildAll picks, read without the materials
+				//! check the server may still apply.
+				foreach ( string buildName, JMConstructionPartData buildPart : parts )
+				{
+					if ( buildPart.m_State == JMConstructionPartState.CAN_BUILD )
+						partNames.Insert( buildName );
+				}
+
+				preview.PreviewBuild( target, partNames );
+			}
+			else if ( id == PREFIX_ACTION + "dismantleall" || id == PREFIX_ACTION + "repairall" )
+			{
+				foreach ( string builtName, JMConstructionPartData builtPart : parts )
+				{
+					if ( builtPart.m_State == JMConstructionPartState.BUILT )
+						partNames.Insert( builtName );
+				}
+
+				if ( id == PREFIX_ACTION + "dismantleall" )
+					preview.PreviewDismantle( target, partNames );
+				else
+					preview.PreviewParts( target, partNames );
+			}
+		}
+		else if ( m_Page == PAGE_PART && parts.Contains( m_PageArg ) )
+		{
+			partNames.Insert( m_PageArg );
+
+			if ( id == PREFIX_ACTION + "build" )
+				preview.PreviewBuild( target, partNames );
+			else if ( id == PREFIX_ACTION + "dismantle" )
+				preview.PreviewDismantle( target, partNames );
+			else if ( id == PREFIX_ACTION + "repairpart" )
+				preview.PreviewParts( target, partNames );
+		}
+	}
+
+	//! "part:foo" is the only page that carries an argument; everything else is
+	//! a bare page name.
+	protected void GoToPage( string page )
+	{
+		int split = page.IndexOf( ":" );
+
+		if ( split > -1 )
+		{
+			m_PageArg = page.Substring( split + 1, page.Length() - split - 1 );
+			m_Page = page.Substring( 0, split );
+		}
+		else
+		{
+			m_PageArg = "";
+			m_Page = page;
+		}
+
+	#ifdef DIAG_DEVELOPER
+		Print(page);
+	#endif
+
+		if ( !page || page == PAGE_MAIN )
+		{
+			m_BreadCrumbs.Clear();
+			m_BreadCrumbs_Labels.Clear();
+			m_PageTitle = "";
+		}
+		else
+		{
+			int idx = m_BreadCrumbs.Find( page );
+
+		#ifdef DIAG_DEVELOPER
+			Print(idx);
+		#endif
+
+			if ( idx > -1 )
+			{
+				for ( int i = m_BreadCrumbs.Count() - 1; i >= idx; --i )
+				{
+					m_BreadCrumbs.Remove( i );
+					m_BreadCrumbs_Labels.Remove( i );
+				}
+			}
+
+			string label = m_PageLabels[page];
+
+			if ( label )
+			{
+				m_BreadCrumbs.Insert( page );
+				m_BreadCrumbs_Labels.Insert( label );
+			}
+
+			m_PageTitle = string.Join( "   ‹   ", m_BreadCrumbs_Labels );
+		}
+
+	#ifdef DIAG_DEVELOPER
+		foreach (string id, string l: m_PageLabels) PrintFormat("m_PageLabels[%1] = %2", id, l);
+		Print(m_BreadCrumbs);
+		Print(m_BreadCrumbs_Labels);
+	#endif
+
+		Show();
+	}
+
+	protected void RunAction( string id, UIActionBase action )
+	{
+		//! Value-carrying actions all look like "name:value".
+		string name = id;
+		string arg = "";
+
+		int split = id.IndexOf( ":" );
+
+		if ( split > -1 )
+		{
+			name = id.Substring( 0, split );
+			arg = id.Substring( split + 1, id.Length() - split - 1 );
+		}
+
+		//! 1) Determine which action to run
+		switch ( name )
+		{
+		case "select":
+			DoSelect( true );
+			break;
+		case "deselect":
+			DoSelect( false );
+			break;
+		case "copyclassnameatts":
+			DoCopyTypeWithAttachments();
+			break;
+		case "copyxml":
+			DoCopyTypesXml();
+			break;
+		case "copyspawnable":
+			DoCopySpawnableTypes();
+			break;
+		case "copyexpansion":
+			DoCopyExpansionObject();
+			break;
+#ifdef DZ_Expansion_Core
+		case "copyloadout":
+			DoCopyExpLoadout();
+			break;
+#endif
+		case "delete":
+			DoDelete();
+			break;
+		case "copypos":
+			COTFeedback.Copy( m_Meta.target.GetPosition().ToString() );
+			break;
+		case "copyori":
+			COTFeedback.Copy( m_Meta.target.GetOrientation().ToString() );
+			break;
+		case "tpme":
+			DoTeleportSelfTo();
+			break;
+		case "tphere":
+			DoTeleportHere();
+			break;
+		case "tpundo":
+			DoTeleportUndo();
+			break;
+		case "tpredo":
+			DoTeleportRedo();
+			break;
+		case "jam":
+			DoWeaponAction( JMESPObjectAction.SetJammed, Flip( WeaponIsJammed() ) );
+			break;
+		case "chamber":
+			DoWeaponAction( JMESPObjectAction.SetChambered, 1 );
+			break;
+		case "unchamber":
+			DoWeaponAction( JMESPObjectAction.SetChambered, 0 );
+			break;
+		case "loadmag":
+			DoWeaponAction( JMESPObjectAction.LoadMagazine, 0 );
+			break;
+		case "fillinternal":
+			DoWeaponAction( JMESPObjectAction.FillInternalMagazine, 0 );
+			break;
+		case "removeattach":
+			DoRemoveAttachment();
+			break;
+		case "setattach":
+			DoSetAttachment( arg );
+			break;
+		case "ignite":
+			DoFireAction( JMESPObjectAction.SetBurning, 1 );
+			break;
+		case "extinguish":
+			DoFireAction( JMESPObjectAction.SetBurning, 0 );
+			break;
+		case "firefuel":
+			DoFireAction( JMESPObjectAction.FireplaceRefuel, 0 );
+			break;
+		case "cookall":
+			DoFireAction( JMESPObjectAction.CookAll, 0 );
+			break;
+		case "stones":
+			DoFireAction( JMESPObjectAction.SetStoneCircle, Flip( FireHasStones() ) );
+			break;
+		case "oven":
+			DoFireAction( JMESPObjectAction.SetOven, Flip( FireIsOven() ) );
+			break;
+		case "lockall":
+			DoLockAll( 1 );
+			break;
+		case "unlockall":
+			DoLockAll( 0 );
+			break;
+		case "parthp":
+			DoPartHealth( arg.ToFloat() * 0.01 );
+			break;
+		case "scale":
+			DoScale( arg.ToFloat() );
+			break;
+		case "msg":
+			DoMessage();
+			break;
+		case "copyname":
+			DoCopyName();
+			break;
+		case "copyguid":
+			DoCopyGUID();
+			break;
+		case "copysteam":
+			DoCopySteam();
+			break;
+		case "copynetid":
+			DoCopyNetworkID();
+			break;
+		case "copyclassname":
+			DoCopyClassname();
+			break;
+		case "copycategory":
+			DoCopyCategory();
+			break;
+		case "strip":
+			DoPlayerVerb( "strip" );
+			break;
+		case "clearcargo":
+			DoPlayerVerb( "clearcargo" );
+			break;
+		case "kick":
+			DoPlayerVerb( "kick" );
+			break;
+		case "ban":
+			DoPlayerVerb( "ban" );
+			break;
+		case "pastepos":
+			DoPastePosition();
+			break;
+		case "pasteori":
+			DoPasteOrientation();
+			break;
+		case "ground":
+			DoSnapToGround();
+			break;
+		case "facecam":
+			DoFaceCamera();
+			break;
+		case "edittransform":
+			DoEditTransform();
+			break;
+		case "health":
+			DoHealth( arg.ToFloat() );
+			break;
+		case "heal":
+			DoHeal();
+			break;
+		case "quantity":
+			DoQuantity( arg.ToFloat() );
+			break;
+		case "liquid":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetLiquid, arg.ToInt(), 0, m_Meta.target );
+			break;
+		case "food":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetFoodStage, arg.ToInt(), 0, m_Meta.target );
+			break;
+		case "disinfect":
+			DoDisinfect();
+			break;
+		case "openitem":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetOpen, 1, 0, m_Meta.target );
+			break;
+		case "closeitem":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetOpen, 0, 0, m_Meta.target );
+			break;
+		case "lock":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetLock, 1, 0, m_LockItem );
+			break;
+		case "unlock":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetLock, 0, 0, m_LockItem );
+			break;
+		case "getcode":
+			m_Meta.module.ObjectAction( JMESPObjectAction.GetCode, 0, 0, m_LockItem );
+			break;
+		case "pastecode":
+			DoPasteCode();
+			break;
+		case "resetcode":
+			m_Meta.module.ObjectAction( JMESPObjectAction.ResetCode, 0, 0, m_LockItem );
+			break;
+		case "setcode":
+			DoSetCode();
+			break;
+		case "shownodes":
+			DoShowNodes();
+			break;
+		case "build":
+			DoConstruction( 0, arg );
+			break;
+		case "dismantle":
+			DoConstruction( 1 );
+			break;
+		case "repairpart":
+			DoConstruction( 2 );
+			break;
+		case "refuel":
+			DoRefuel();
+			break;
+		case "fuel":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetFuel, 0, arg.ToFloat() * 0.01, m_Meta.target );
+			break;
+		case "coolant":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetCoolant, 0, arg.ToFloat() * 0.01, m_Meta.target );
+			break;
+		case "flag":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetFlagRaised, 0, arg.ToFloat() * 0.01, m_Meta.target );
+			break;
+		case "lockwheels":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetLockWheels, 1, 0, m_Meta.target );
+			break;
+		case "unlockwheels":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetLockWheels, 0, 0, m_Meta.target );
+			break;
+		case "repairfill":
+			m_Meta.module.ObjectAction( JMESPObjectAction.RepairAndFillSlots, 0, 0, m_Meta.target );
+			break;
+		case "changecolor":
+			m_Meta.module.ObjectAction( JMESPObjectAction.ChangeColor, arg.ToInt(), 0, m_Meta.target );
+			break;
+		case "pingrenade":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetGrenadePin, 1, 0, m_Meta.target );
+			break;
+		case "unpingrenade":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetGrenadePin, 0, 0, m_Meta.target );
+			break;
+		case "triggertrap":
+			m_Meta.module.ObjectAction( JMESPObjectAction.TriggerTrap, 0, 0, m_Meta.target );
+			break;
+		case "armtrap":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetTrapArmed, 1, 0, m_Meta.target );
+			break;
+		case "disarmtrap":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetTrapArmed, 0, 0, m_Meta.target );
+			break;
+		case "immobilize":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetImmobilized, Flip( CreatureIsImmobilized() ), 0, m_Meta.target );
+			break;
+		case "objclearcargo":
+			m_Meta.module.ObjectAction( JMESPObjectAction.ClearCargo, 0, 0, m_Meta.target );
+			break;
+		case "buildall":
+			m_Meta.module.ObjectAction( JMESPObjectAction.BuildAll, 0, 0, m_Meta.target );
+			break;
+		case "dismantleall":
+			m_Meta.module.ObjectAction( JMESPObjectAction.DismantleAll, 0, 0, m_Meta.target );
+			break;
+		case "repairall":
+			m_Meta.module.ObjectAction( JMESPObjectAction.RepairAll, 0, 0, m_Meta.target );
+			break;
+		case "openfence":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetFenceOpen, 1, 0, m_Meta.target );
+			break;
+		case "closefence":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetFenceOpen, 0, 0, m_Meta.target );
+			break;
+		case "opentent":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetTentOpen, 1, 0, m_Meta.target );
+			break;
+		case "closetent":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetTentOpen, 0, 0, m_Meta.target );
+			break;
+		case "opendoor":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetHouseDoorOpen, 1, m_Meta.m_DoorIndex, m_Meta.target );
+			break;
+		case "closedoor":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetHouseDoorOpen, 0, m_Meta.m_DoorIndex, m_Meta.target );
+			break;
+		case "lockdoor":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetHouseDoorLocked, 1, m_Meta.m_DoorIndex, m_Meta.target );
+			break;
+		case "unlockdoor":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetHouseDoorLocked, 0, m_Meta.m_DoorIndex, m_Meta.target );
+			break;
+		case "opencardoors":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetCarDoors, 1, 0, m_Meta.target );
+			break;
+		case "closecardoors":
+			m_Meta.module.ObjectAction( JMESPObjectAction.SetCarDoors, 0, 0, m_Meta.target );
+			break;
+		case "unstuck":
+			DoUnstuck();
+			break;
+		case "vehunlock":
+			DoVehicleLock();
+			break;
+		case "vehunpair":
+			DoVehicleUnPair();
+			break;
+		case "spectate":
+			DoSpectate( action );
+			break;
+		case "uncon":
+			DoUnconscious();
+			break;
+		case "freeze":
+			DoFreeze();
+			break;
+		case "legs":
+			DoBrokenLegs();
+			break;
+#ifndef DAYZ_1_29
+		case "ragdoll":
+			DoRagdoll();
+			break;
+#endif
+		}
+
+		//! 2) Determine what to do with the menu after running the action
+		switch ( name )
+		{
+		case "build":
+		case "dismantle":
+			break;
+
+		case "repairpart":
+			OnConstructionAction( PAGE_BUILD, m_PageArg );
+			break;
+
+		case "parthp":
+			OnConstructionAction( PAGE_PART + ":" + m_PageArg, m_PageArg );
+			break;
+
+		case "removeattach":
+		case "setattach":
+			break;
+
+		default:
+			Close();
+			break;
+		}
+	}
+
+	void OnConstructionAction( string page, string partName )
+	{
+		if ( !IsOpen() )
+			return;
+
+		if ( m_Page == PAGE_BUILD || m_Page == PAGE_PART )
+		{
+			if ( GetConstructionPartsFiltered().Count() > 1 )
+				GoToPage( page );
+			else
+				Close();
+		}
+	}
+
+	void OnItemAttachmentChanged( string page, string slotName, EntityAI item )
+	{
+		if ( !IsOpen() )
+			return;
+
+		if ( m_Page == PAGE_ATTACHMENTS || m_Page == PAGE_ATTACH_SLOT || m_Page == PAGE_LOCK )
+		{
+			if ( m_Page == PAGE_LOCK )
+				page = PAGE_MAIN;
+
+			if ( GetSlotLabels().Count() > 1 )
+				GoToPage( page );
+			else
+				Close();
+		}
+	}
+
+	//! <type name="..."/> block - the types.xml per-object entry.
+	protected void DoCopyTypesXml()
+	{
+		if ( !m_Meta || !m_Meta.target )
+			return;
+
+		string xml = "	<type name=\"" + m_Meta.targetType + "\">\n";
+		xml += "		<nominal>0</nominal>\n";
+		xml += "		<lifetime>3888000</lifetime>\n";
+		xml += "		<restock>0</restock>\n";
+		xml += "		<min>0</min>\n";
+		xml += "		<quantmin>-1</quantmin>\n";
+		xml += "		<quantmax>-1</quantmax>\n";
+		xml += "		<cost>100</cost>\n";
+		xml += "		<flags count_in_cargo=\"0\" count_in_hoarder=\"0\" count_in_map=\"1\" count_in_player=\"0\" crafted=\"0\" deloot=\"0\"/>\n";
+		xml += "	</type>";
+		COTFeedback.Copy( xml );
+	}
+
+	//! Full <spawnabletypes> XML for this one object, matching the
+	//! format JMESPModule.CopyToClipboardSpawnableTypes produces for
+	//! the selected-objects set - but scoped to m_Meta.target.
+	protected void DoCopySpawnableTypes()
+	{
+		if ( !m_Meta || !m_Meta.target )
+			return;
+
+		string xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n";
+		xml += "<spawnabletypes>\n";
+		xml += "\t<type name=\"" + m_Meta.targetType + "\">\n";
+
+		EntityAI entity = EntityAI.Cast( m_Meta.target );
+		if ( entity && entity.GetInventory() )
+		{
+			int attCount = entity.GetInventory().AttachmentCount();
+			for ( int a = 0; a < attCount; ++a )
+			{
+				EntityAI att = entity.GetInventory().GetAttachmentFromIndex( a );
+				if ( !att )
+					continue;
+				xml += "\t\t<attachments chance=\"1.00\">\n";
+				xml += "\t\t\t<item name=\"" + att.GetType() + "\" chance=\"1.00\" />\n";
+				xml += "\t\t</attachments>\n";
+			}
+
+			CargoBase cargo = entity.GetInventory().GetCargo();
+			if ( cargo )
+			{
+				int cargoCount = cargo.GetItemCount();
+				for ( int c = 0; c < cargoCount; ++c )
+				{
+					xml += "\t\t<cargo chance=\"1.00\">\n";
+					xml += "\t\t\t<item name=\"" + cargo.GetItem( c ).GetType() + "\" />\n";
+					xml += "\t\t</cargo>\n";
+				}
+			}
+		}
+
+		xml += "\t</type>\n";
+		xml += "</spawnabletypes>\n";
+		COTFeedback.Copy( xml );
+	}
+
+#ifdef DZ_Expansion_Core
+	protected void DoCopyExpLoadout()
+	{
+		if ( !m_Meta || !m_Meta.target )
+			return;
+
+		EntityAI entity = EntityAI.Cast( m_Meta.target );
+		if ( !entity )
+			return;
+
+		ExpansionPrefab expPrefab = new ExpansionPrefab();
+
+		if ( entity.IsMan() )
+		{
+			JMCompensationHelper.AddChildrenToExpLoadoutRecursive( expPrefab, entity );
+		}
+		else
+		{
+			expPrefab.ClassName = entity.GetType();
+			JMCompensationHelper.AddToExpLoadoutRecursive( expPrefab, entity );
+		}
+
+		string loadoutJSON;
+		string errorMsg;
+		if ( JsonFileLoader<ExpansionPrefab>.MakeData( expPrefab, loadoutJSON, errorMsg ) )
+			COTFeedback.Copy( loadoutJSON );
+		else
+			COTCreateLocalAdminNotification( new StringLocaliser( errorMsg ) );
+	}
+#endif
+
+	//! One line of Expansion's object-placement file, the same format
+	//! JMESPModule.CopyToClipboardMap writes for a selection:
+	//!   ClassName|X Y Z|RotX RotY RotZ|special|takeable
+	protected void DoCopyExpansionObject()
+	{
+		if ( !m_Meta || !m_Meta.target )
+			return;
+
+		Object target = m_Meta.target;
+
+		COTFeedback.Copy( target.GetType() + "|" + target.GetPosition().ToString( false ) + "|" + target.GetOrientation().ToString( false ) + "|false|true" );
+	}
+
+	protected void DoCopyTypeWithAttachments()
+	{
+		if ( !m_Meta || !m_Meta.target )
+			return;
+
+		EntityAI entity = EntityAI.Cast( m_Meta.target );
+		if ( !entity )
+		{
+			COTFeedback.Copy( m_Meta.targetType );
+			return;
+		}
+
+		string copyStr = "";
+		BuildClassnameWithAttachments( entity, copyStr );
+		COTFeedback.Copy( copyStr );
+	}
+
+	protected static void BuildClassnameWithAttachments( EntityAI entity, inout string result )
+	{
+		if ( !entity )
+			return;
+
+		if ( result != "" )
+			result += " ";
+
+		result += entity.GetType();
+
+		if ( !entity.GetInventory() )
+			return;
+
+		int attCount = entity.GetInventory().AttachmentCount();
+		for ( int i = 0; i < attCount; ++i )
+		{
+			EntityAI att = entity.GetInventory().GetAttachmentFromIndex( i );
+			if ( att )
+			{
+				BuildClassnameWithAttachments( att, result );
+			}
+		}
+	}
+
+	protected void DoSelect( bool selected )
+	{
+		if ( m_Meta.widgetHandler )
+		{
+			if ( selected )
+				m_Meta.widgetHandler.Select();
+			else
+				m_Meta.widgetHandler.Deselect();
+
+			return;
+		}
+
+		//! No tag on screen for this object - the list can still select it.
+		if ( selected )
+			JMScriptInvokers.ADD_OBJECT.Invoke( m_Meta.target );
+		else
+			JMScriptInvokers.REMOVE_OBJECT.Invoke( m_Meta.target, m_Meta.networkLow, m_Meta.networkHigh );
+	}
+
+	protected void DoDelete()
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_DELETE ) )
+			return;
+
+		m_Meta.module.DeleteObject( m_Meta.target );
+
+		m_Meta.m_TargetDeleted = true;
+	}
+
+	//! Move the admin to the tracked object.
+	protected void DoTeleportSelfTo()
+	{
+		if ( !Perm( JMConstants.PERM_PLAYER_TELEPORT_POSITION ) )
+			return;
+
+		JMTeleportModule teleportModule = CF_Modules<JMTeleportModule>.Get();
+
+		JMPlayerInstance self = GetPermissionsManager().GetClientPlayer();
+
+		if ( !teleportModule || !self )
+			return;
+
+		teleportModule.Position( m_Meta.target.GetPosition(), { self.GetGUID() } );
+	}
+
+	//! Move the tracked object to the admin. A player goes through the teleport
+	//! module so the move is logged as a teleport; anything else is a position
+	//! set, which is what ESP has always called it.
+	protected void DoTeleportHere()
+	{
+		Man self = g_Game.GetPlayer();
+
+		if ( !self )
+			return;
+
+		vector pos = self.GetPosition();
+
+		JMPlayerInstance targetPlayer = TargetPlayer();
+
+		if ( targetPlayer )
+		{
+			if ( !Perm( JMConstants.PERM_PLAYER_TELEPORT_POSITION ) )
+				return;
+
+			JMTeleportModule teleportModule = CF_Modules<JMTeleportModule>.Get();
+
+			if ( !teleportModule )
+				return;
+
+			//! The teleport module records the history for a player, the same
+			//! way it does for every other path into it - so this branch pushes
+			//! nothing of its own.
+			teleportModule.Position( pos, { targetPlayer.GetGUID() } );
+
+			return;
+		}
+
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_SETPOSITION ) )
+			return;
+
+		//! A player's move is recorded inside the teleport module, which every
+		//! path into it shares. Anything else is moved by a raw position set,
+		//! so this call site records its own.
+		JMTeleportHistory.PushObject( m_Meta.target );
+
+		m_Meta.module.SetPosition( pos, m_Meta.target );
+	}
+
+	//! The tracked player, however this client can name one. m_Meta.player comes from the
+	//! target's identity, and a client only holds identities for players it can see, so it is
+	//! null for most of the roster. The shared lookup fallback keeps this menu acting on the
+	//! same player as the player manager, so one teleport history serves both.
+	protected JMPlayerInstance TargetPlayer()
+	{
+		if ( m_Meta.player )
+			return m_Meta.player;
+
+		return JMTeleportHistory.PlayerOf( m_Meta.target );
+	}
+
+	//! Put back a step an undo took away. Only ever reaches somewhere the target
+	//! has actually been, so it cannot invent a move nobody made.
+	protected void DoTeleportRedo()
+	{
+		JMTeleportHistory.RedoTarget( m_Meta.target, 0 );
+	}
+
+	// =========================================================================
+	//  Weapons and fireplaces
+	// =========================================================================
+
+	//! The int that toggles a state. These actions carry on/off as the ivalue of a generic
+	//! action, and Enforce will not narrow a bool into an int parameter, so the negation
+	//! becomes a number here rather than at the call site.
+	protected int Flip( bool state )
+	{
+		if ( state )
+			return 0;
+
+		return 1;
+	}
+
+	//! Whether this weapon takes a detachable magazine at all.
+	//!
+	//! Read off the weapon's own magazines[] the same way the server loads one,
+	//! so the row is offered exactly when the action behind it can do something.
+	protected bool WeaponAcceptsMagazine( Weapon_Base weapon )
+	{
+		if ( !weapon )
+			return false;
+
+		TStringArray magazines = new TStringArray;
+		g_Game.ConfigGetTextArray( "CfgWeapons " + weapon.GetType() + " magazines", magazines );
+
+		if ( magazines.Count() == 0 )
+			g_Game.ConfigGetTextArray( "CfgVehicles " + weapon.GetType() + " magazines", magazines );
+
+		return magazines.Count() > 0;
+	}
+
+	//! Mirrors Exec_LoadMagazine's own "already wearing one" loop so the menu
+	//! label agrees with what the click will actually do.
+	protected bool WeaponHasMagazineAttached( Weapon_Base weapon )
+	{
+		if ( !weapon || !weapon.GetInventory() )
+			return false;
+
+		Magazine existing;
+
+		for ( int i = 0; i < weapon.GetInventory().AttachmentCount(); i++ )
+		{
+			if ( Class.CastTo( existing, weapon.GetInventory().GetAttachmentFromIndex( i ) ) )
+				return true;
+		}
+
+		return false;
+	}
+
+	protected bool WeaponIsJammed()
+	{
+		Weapon_Base weapon;
+
+		if ( !Class.CastTo( weapon, m_Meta.target ) )
+			return false;
+
+		return weapon.IsJammed();
+	}
+
+	protected bool FireHasStones()
+	{
+		FireplaceBase fireplace;
+
+		if ( !Class.CastTo( fireplace, m_Meta.target ) )
+			return false;
+
+		return fireplace.HasStoneCircle();
+	}
+
+	protected bool FireIsOven()
+	{
+		FireplaceBase fireplace;
+
+		if ( !Class.CastTo( fireplace, m_Meta.target ) )
+			return false;
+
+		return fireplace.IsOven();
+	}
+
+	protected void DoWeaponAction( int action, int value )
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_WEAPON ) )
+			return;
+
+		m_Meta.module.ObjectAction( action, value, 0, m_Meta.target );
+	}
+
+	//! m_PageArg is the slot id BuildAttachSlot() was showing - see that
+	//! method's own comment for why.
+	protected void DoRemoveAttachment()
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_WEAPON ) || m_PageArg == "" )
+			return;
+
+		m_Meta.module.RemoveAttachment( m_Meta.target, m_PageArg.ToInt() );
+	}
+
+	protected void DoSetAttachment( string className )
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_WEAPON ) || m_PageArg == "" )
+			return;
+
+		if ( !className )
+			return;
+
+		m_Meta.module.SetAttachment( m_Meta.target, m_PageArg.ToInt(), className );
+	}
+
+	protected void DoFireAction( int action, int value )
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_FIREPLACE ) )
+			return;
+
+		m_Meta.module.ObjectAction( action, value, 0, m_Meta.target );
+	}
+
+	protected void DoLockAll( int locked )
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_LOCK ) )
+			return;
+
+		m_Meta.module.ObjectAction( JMESPObjectAction.SetLockAll, locked, 0, m_Meta.target );
+	}
+
+	//! Set the health of the part whose page this was opened from.
+	//!
+	//! m_PageArg is the part name, carried through the page id - the health page
+	//! is reached from one part's page and acts only on that part.
+	protected void DoPartHealth( float health01 )
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_SETHEALTH ) )
+			return;
+
+		EntityAI bb;
+
+		if ( !Class.CastTo( bb, m_Meta.target ) || m_PageArg == "" )
+			return;
+
+		m_Meta.module.BaseBuilding_SetPartHealth( bb, m_PageArg, health01 );
+	}
+
+	// Player verbs: routed through JMPlayerModule rather than reimplemented, so each one is
+	// logged, webhooked and permissioned exactly as the same button in the player manager.
+
+	protected JMPlayerModule PlayerModule()
+	{
+		JMPlayerModule playerModule;
+
+		if ( !Class.CastTo( playerModule, GetModuleManager().GetModule( JMPlayerModule ) ) )
+			return NULL;
+
+		return playerModule;
+	}
+
+	protected void DoScale( float scale )
+	{
+		JMPlayerInstance instance = TargetPlayer();
+		JMPlayerModule playerModule = PlayerModule();
+
+		if ( !instance || !playerModule || !Perm( JMConstants.PERM_PLAYER_SCALE ) )
+			return;
+
+		playerModule.SetScale( scale, { instance.GetGUID() } );
+	}
+
+	//! Send whatever is on the clipboard as a message. A context menu cannot be typed into,
+	//! so free-form values (a message body included) go through the clipboard.
+	protected void DoMessage()
+	{
+		JMPlayerInstance instance = TargetPlayer();
+		JMPlayerModule playerModule = PlayerModule();
+
+		if ( !instance || !playerModule || !Perm( JMConstants.PERM_PLAYER_MESSAGE ) )
+			return;
+
+		JMESPModule espModule = CF_Modules<JMESPModule>.Get();
+		if ( espModule )
+		{
+			JMESPForm form = JMESPForm.Cast( espModule.GetForm() );
+			if ( form )
+			{
+				form.PromptSendMessage( instance.GetGUID(), instance.GetName() );
+			}
+		}
+	}
+
+	protected void DoCopyName()
+	{
+		JMPlayerInstance instance = TargetPlayer();
+
+		if ( !instance )
+			return;
+
+		COTFeedback.Copy( instance.GetName() );
+	}
+
+	protected void DoCopyGUID()
+	{
+		JMPlayerInstance instance = TargetPlayer();
+
+		if ( !instance )
+			return;
+
+		COTFeedback.Copy( instance.GetGUID() );
+	}
+
+	protected void DoCopySteam()
+	{
+		JMPlayerInstance instance = TargetPlayer();
+
+		if ( !instance )
+			return;
+
+		COTFeedback.Copy( instance.GetSteam64ID() );
+	}
+
+	protected void DoCopyNetworkID()
+	{
+		if ( !m_Meta )
+			return;
+
+		COTFeedback.Copy( m_Meta.networkLow.ToString() + " " + m_Meta.networkHigh.ToString() );
+	}
+
+	protected void DoCopyClassname()
+	{
+		if ( !m_Meta )
+			return;
+
+		COTFeedback.Copy( m_Meta.targetType );
+	}
+
+	protected void DoCopyCategory()
+	{
+		if ( !m_Meta || !m_Meta.type )
+			return;
+
+		COTFeedback.Copy( Widget.TranslateString( m_Meta.type.Localisation ) );
+	}
+
+	//! The four destructive player verbs, by name. One function rather than four: they
+	//! differ only in the permission needed and the call made, and all resolve the same
+	//! target first.
+	protected void DoPlayerVerb( string verb )
+	{
+		JMPlayerInstance instance = TargetPlayer();
+		JMPlayerModule playerModule = PlayerModule();
+
+		if ( !instance || !playerModule )
+			return;
+
+		array<string> guids = { instance.GetGUID() };
+
+		if ( verb == "strip" && Perm( JMConstants.PERM_PLAYER_STRIP ) )
+			playerModule.Strip( guids );
+		else if ( verb == "clearcargo" && Perm( JMConstants.PERM_PLAYER_CLEARCARGO ) )
+			playerModule.ClearCargo( guids );
+		else if ( verb == "kick" && Perm( JMConstants.PERM_PLAYER_KICK ) )
+			playerModule.Kick( guids, "" );
+		else if ( verb == "ban" && Perm( JMConstants.PERM_PLAYER_BAN ) )
+			playerModule.Ban( guids, "" );
+	}
+
+	//! Put this target back where it was before its last move; each click walks one more
+	//! step back, up to JMTeleportHistory.MAX_ENTRIES. Routed by what the target IS, not by
+	//! this being the ESP menu, so a player teleported from the player manager is undone
+	//! from here too.
+	protected void DoTeleportUndo()
+	{
+		JMTeleportHistory.UndoTarget( m_Meta.target, 0 );
+	}
+
+	//! Opens the free-form Position/Orientation popup for the current target,
+	//! at the same spot this menu itself is showing, and closes the menu -
+	//! the popup takes over from here.
+	protected void DoEditTransform()
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_SETPOSITION ) && !Perm( JMConstants.PERM_ESP_OBJECT_SETORIENTATION ) )
+			return;
+
+		JMESPTransformPopup popup = GetTransformPopup();
+
+		if ( !popup )
+			return;
+
+		popup.Open( m_Meta, m_X, m_Y );
+
+		Close();
+	}
+
+	protected void DoPastePosition()
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_SETPOSITION ) )
+			return;
+
+		string clipboard;
+		g_Game.CopyFromClipboard( clipboard );
+
+		vector pos = clipboard.BeautifiedToVector();
+
+		if ( pos == vector.Zero )
+			return;
+
+		//! Pasting coordinates is a teleport by another name, so it is a step
+		//! the undo should be able to take back.
+		JMTeleportHistory.PushObject( m_Meta.target );
+
+		m_Meta.module.SetPosition( pos, m_Meta.target );
+	}
+
+	protected void DoPasteOrientation()
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_SETORIENTATION ) )
+			return;
+
+		string clipboard;
+		g_Game.CopyFromClipboard( clipboard );
+
+		vector ori = clipboard.BeautifiedToVector();
+
+		if ( ori == vector.Zero )
+			return;
+
+		m_Meta.module.SetOrientation( ori, m_Meta.target );
+	}
+
+	//! Drop the object onto the terrain under it. Started well above its own
+	//! position so an object already sunk into the ground still finds the
+	//! surface rather than the inside of itself.
+	protected void DoSnapToGround()
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_SETPOSITION ) )
+			return;
+
+		vector pos = m_Meta.target.GetPosition();
+
+		vector from = pos + "0 20 0";
+		vector to = pos - "0 200 0";
+
+		vector contactPos;
+		vector contactDir;
+		int contactComponent;
+
+		if ( !DayZPhysics.RaycastRV( from, to, contactPos, contactDir, contactComponent, NULL, NULL, m_Meta.target, false, true ) )
+			return;
+
+		m_Meta.module.SetPosition( contactPos, m_Meta.target );
+	}
+
+	protected void DoFaceCamera()
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_SETORIENTATION ) )
+			return;
+
+		vector toCamera = g_Game.GetCurrentCameraPosition() - m_Meta.target.GetPosition();
+		toCamera[1] = 0;
+
+		if ( toCamera.Length() < 0.01 )
+			return;
+
+		vector ori = m_Meta.target.GetOrientation();
+		vector angles = toCamera.VectorToAngles();
+
+		ori[0] = angles[0];
+
+		m_Meta.module.SetOrientation( ori, m_Meta.target );
+	}
+
+	protected void DoHealth( float percent )
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_SETHEALTH ) )
+			return;
+
+		m_Meta.module.SetHealth( MaxHealth() * percent * 0.01, "", m_Meta.target );
+	}
+
+	protected void DoHeal()
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_HEAL ) )
+			return;
+
+		if ( ( m_Meta.target.IsInherited( Man ) || m_Meta.target.IsInherited( DayZCreature ) ) && m_Meta.target.IsDamageDestroyed() )
+		{
+			COTCreateLocalAdminNotification( new StringLocaliser( "STR_COT_NOTIFICATION_ERROR_CANNOT_HEAL_DEAD_CREATURE" ) );
+			return;
+		}
+
+		m_Meta.module.Heal( m_Meta.target );
+	}
+
+	protected void DoQuantity( float percent )
+	{
+		ItemBase item = ItemBase.Cast( m_Meta.target );
+
+		if ( !item )
+			return;
+
+		m_Meta.module.ObjectAction( JMESPObjectAction.SetQuantity, 0, item.GetQuantityMax() * percent * 0.01, m_Meta.target );
+	}
+
+	protected void DoDisinfect()
+	{
+		ItemBase item = ItemBase.Cast( m_Meta.target );
+
+		if ( !item )
+			return;
+
+		int cleanness = 1;
+
+		if ( item.GetCleanness() > 0 )
+			cleanness = 0;
+
+		m_Meta.module.ObjectAction( JMESPObjectAction.SetCleanness, cleanness, 0, m_Meta.target );
+	}
+
+	//! A code is four free-form digits, which a menu has no way to ask for -
+	//! so it comes in the way it went out, through the clipboard.
+	protected void DoPasteCode()
+	{
+		string clipboard;
+		g_Game.CopyFromClipboard( clipboard );
+
+		clipboard = clipboard.Trim();
+
+		if ( clipboard == "" )
+			return;
+
+		m_Meta.module.ObjectAction( JMESPObjectAction.SetCode, clipboard.ToInt(), 0, m_LockItem );
+	}
+
+	//! Opens the lock's own keypad to dial the new code in
+	protected void DoSetCode()
+	{
+		if ( !m_LockItem )
+			return;
+
+		m_Meta.module.OpenLockMenu( m_LockItem );
+	}
+
+	protected void DoShowNodes()
+	{
+		EntityAI building = EntityAI.Cast( m_Meta.target );
+		JMConstructionPreview preview = m_Meta.module.GetConstructionPreview();
+
+		preview.SetShowNodes( building, !preview.IsShowingNodes( building ) );
+	}
+
+	protected void DoConstruction( int what, string partName = "" )
+	{
+		EntityAI building = EntityAI.Cast( m_Meta.target );
+
+		if ( !partName )
+			partName = m_PageArg;
+
+		if ( !building || partName == "" )
+			return;
+
+		if ( what == 0 )
+			m_Meta.module.BaseBuilding_Build( building, partName );
+		else if ( what == 1 )
+			m_Meta.module.BaseBuilding_Dismantle( building, partName );
+		else
+			m_Meta.module.BaseBuilding_Repair( building, partName );
+	}
+
+	protected void DoRefuel()
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_CAR_REFUEL ) )
+			return;
+
+		m_Meta.module.Vehicle_Refuel( m_Meta.target );
+	}
+
+	protected void DoUnstuck()
+	{
+		if ( !Perm( JMConstants.PERM_ESP_OBJECT_CAR_UNSTUCK ) )
+			return;
+
+		m_Meta.module.Vehicle_Unstuck( m_Meta.target );
+	}
+
+	//! Both of these are network-id only requests, so a tracked object with no
+	//! net id (offline, or scenery) has nothing to send and is skipped.
+	protected void DoVehicleLock()
+	{
+	#ifdef EXPANSIONMODVEHICLE
+		if ( !Perm( JMConstants.PERM_VEHICLES_LOCK ) )
+			return;
+
+		JMVehiclesModule vehiclesModule = CF_Modules<JMVehiclesModule>.Get();
+
+		if ( !vehiclesModule || ( !m_Meta.networkLow && !m_Meta.networkHigh ) )
+			return;
+
+		if ( m_Meta.networkLow || m_Meta.networkHigh )
+			vehiclesModule.RequestLockVehicleById( m_Meta.networkLow, m_Meta.networkHigh );
+		else
+			vehiclesModule.RequestLockVehicle( m_Meta.target );
+	#endif
+	}
+
+	protected void DoVehicleUnPair()
+	{
+	#ifdef EXPANSIONMODVEHICLE
+		if ( !Perm( JMConstants.PERM_VEHICLES_UNPAIR ) )
+			return;
+
+		JMVehiclesModule vehiclesModule = CF_Modules<JMVehiclesModule>.Get();
+
+		if ( !vehiclesModule )
+			return;
+
+		if ( m_Meta.networkLow || m_Meta.networkHigh )
+			vehiclesModule.RequestUnPairVehicleById( m_Meta.networkLow, m_Meta.networkHigh );
+		else
+			vehiclesModule.RequestUnPairVehicle(m_Meta.target);
+	#endif
+	}
+
+	protected void DoSpectate( UIActionBase action )
+	{
+		JMPlayerModule playerModule = CF_Modules<JMPlayerModule>.Get();
+
+		if ( !playerModule )
+			return;
+
+		playerModule.Click_Spectate( action, m_Meta.target );
+	}
+
+	protected void DoUnconscious()
+	{
+		JMPlayerModule playerModule = CF_Modules<JMPlayerModule>.Get();
+		JMPlayerInstance instance = TargetPlayer();
+
+		if ( !playerModule || !instance )
+			return;
+
+		if ( instance.IsUnconscious() )
+			playerModule.SetShock( SHOCK_CONSCIOUS, { instance.GetGUID() } );
+		else
+			playerModule.SetShock( 0, { instance.GetGUID() } );
+	}
+
+	protected void DoFreeze()
+	{
+		JMPlayerModule playerModule = CF_Modules<JMPlayerModule>.Get();
+		JMPlayerInstance instance = TargetPlayer();
+
+		if ( !playerModule || !instance )
+			return;
+
+		playerModule.SetFreeze( !instance.IsFrozen(), { instance.GetGUID() } );
+	}
+
+	protected void DoBrokenLegs()
+	{
+		JMPlayerModule playerModule = CF_Modules<JMPlayerModule>.Get();
+		JMPlayerInstance instance = TargetPlayer();
+
+		if ( !playerModule || !instance )
+			return;
+
+		playerModule.SetBrokenLegs( !instance.HasBrokenLegs(), { instance.GetGUID() } );
+	}
+
+#ifndef DAYZ_1_29
+	protected void DoRagdoll()
+	{
+		JMPlayerModule playerModule = CF_Modules<JMPlayerModule>.Get();
+		JMPlayerInstance instance = TargetPlayer();
+
+		if ( !playerModule || !instance )
+			return;
+
+		playerModule.SetRagdoll( !instance.IsRagdoll(), { instance.GetGUID() } );
+	}
+#endif
+
+	// =========================================================================
+	//  Value tables
+	// =========================================================================
+
+	protected array<string> LiquidNames()
+	{
+		array<string> names = {};
+		names.Insert( "#STR_COT_ESP_MODULE_MENU_LIQUID_NONE" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_WATER" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_FRESHWATER" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_SALTWATER" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_CLEANWATER" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_SNOW" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_VODKA" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_BEER" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_GASOLINE" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_DIESEL" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_DISINFECTANT" );
+		names.Insert( "#STR_COT_OBJECT_LIQUID_SALINE" );
+		return names;
+	}
+
+	protected array<int> LiquidValues()
+	{
+		array<int> values = {};
+		values.Insert( LIQUID_NONE );
+		values.Insert( LIQUID_WATER );
+		values.Insert( LIQUID_FRESHWATER );
+		values.Insert( LIQUID_SALTWATER );
+		values.Insert( LIQUID_CLEANWATER );
+		values.Insert( LIQUID_SNOW );
+		values.Insert( LIQUID_VODKA );
+		values.Insert( LIQUID_BEER );
+		values.Insert( LIQUID_GASOLINE );
+		values.Insert( LIQUID_DIESEL );
+		values.Insert( LIQUID_DISINFECTANT );
+		values.Insert( LIQUID_SALINE );
+		return values;
+	}
+
+	protected array<string> FoodStageNames()
+	{
+		array<string> names = {};
+		names.Insert( "#STR_COT_PLAYER_MODULE_INV_STAGE_RAW" );
+		names.Insert( "#STR_COT_PLAYER_MODULE_INV_STAGE_BAKED" );
+		names.Insert( "#STR_COT_PLAYER_MODULE_INV_STAGE_BOILED" );
+		names.Insert( "#STR_COT_PLAYER_MODULE_INV_STAGE_DRIED" );
+		names.Insert( "#STR_COT_PLAYER_MODULE_INV_STAGE_BURNED" );
+		names.Insert( "#STR_COT_PLAYER_MODULE_INV_STAGE_ROTTEN" );
+		return names;
+	}
+
+	protected array<int> FoodStageValues()
+	{
+		array<int> values = {};
+		values.Insert( FoodStageType.RAW );
+		values.Insert( FoodStageType.BAKED );
+		values.Insert( FoodStageType.BOILED );
+		values.Insert( FoodStageType.DRIED );
+		values.Insert( FoodStageType.BURNED );
+		values.Insert( FoodStageType.ROTTEN );
+		return values;
+	}
+}

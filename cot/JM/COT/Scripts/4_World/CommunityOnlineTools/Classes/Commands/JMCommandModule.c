@@ -1,6 +1,6 @@
 class JMCommandModule: JMModuleBase
 {
-	private ref map<string, ref map<string, ref JMCommand>> m_CommandMap = new map<string, ref map<string, ref JMCommand>>();
+	protected ref map<string, ref map<string, ref JMCommand>> m_CommandMap = new map<string, ref map<string, ref JMCommand>>();
 
 	void JMCommandModule() 
 	{
@@ -38,8 +38,14 @@ class JMCommandModule: JMModuleBase
 				string input;
 				if (!ctx.Read(input)) return;
 
+				if ( input.Length() > 512 )
+					return;
+
 				array<string> tokens = new array<string>();
 				input.Split(" ", tokens);
+
+				if ( tokens.Count() < 2 )
+					return;
 
 				string strCommand = tokens[0];
 				strCommand.ToLower();

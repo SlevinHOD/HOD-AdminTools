@@ -1,0 +1,249 @@
+class UIActionText: UIActionBase
+{
+	protected string m_ActualText;
+
+	//! Draw the value hard left, in the label's slot, instead of hard right.
+	//! See SetValueLeftAligned.
+	protected bool m_ValueLeftAligned;
+	protected TextWidget  m_Label;
+	protected TextWidget  m_Text;
+	protected ImageWidget m_Icon;
+	protected ImageWidget m_IconRight;
+
+	//! Glyph on the FAR RIGHT of the row, after the value: label - value - icon.
+	//! Avoids the left slot, which crowds the label on a narrow panel; the value is
+	//! pushed left to clear it.
+	void SetIconRight( string imagePath )
+	{
+		if ( !m_IconRight )
+			return;
+
+		if ( imagePath == "" )
+		{
+			m_IconRight.Show( false );
+			if ( m_Text )
+				m_Text.SetTextOffset( -6, 0 );
+			return;
+		}
+
+		m_IconRight.LoadImageFile( 0, imagePath );
+		m_IconRight.Show( true );
+
+		// Icon sits 8px in from the right edge and is 14 wide -> 22px, plus a
+		// 14px gap so the number does not read as part of the glyph.
+		if ( m_Text )
+			m_Text.SetTextOffset( -36, 0 );
+	}
+
+	//! Colour of the label text. NOT SetColor - the base paints layoutRoot, which
+	//! is the row's background, so a caller reaching for "make this text red"
+	//! gets a red bar behind black text instead.
+	void SetLabelColor( int color )
+	{
+		if ( m_Label )
+			m_Label.SetColor( color );
+	}
+
+	void SetLabelHAlign( UIActionHAlign type )
+	{
+		if ( !m_Label )
+		{
+			Error("[UIActionText] SetLabelHAlign failed: m_Label is null!");
+			return;
+		}
+		switch ( type )
+		{
+		case UIActionHAlign.CENTER:
+			m_Label.SetFlags( m_Label.GetFlags() | WidgetFlags.CENTER );
+			break;
+		case UIActionHAlign.RIGHT:
+			m_Label.SetFlags( m_Label.GetFlags() | WidgetFlags.RALIGN );
+			break;
+		}
+	}
+
+	//! How far in from the left edge the label sits. SetIcon already pushes it
+	//! clear of the glyph; this is for a caller that wants a specific indent.
+	void SetLabelOffset( float x )
+	{
+		if ( m_Label )
+			m_Label.SetTextOffset( x, 0 );
+	}
+
+	void SetLabelVAlign( UIActionVAlign type )
+	{
+		if ( !m_Label )
+		{
+			Error("[UIActionText] SetLabelVAlign failed: m_Label is null!");
+			return;
+		}
+		switch ( type )
+		{
+		case UIActionVAlign.CENTER:
+			m_Label.SetFlags( m_Label.GetFlags() | WidgetFlags.VCENTER );
+			break;
+		}
+	}
+
+	void SetTextHAlign( UIActionHAlign type )
+	{
+		if ( !m_Text )
+		{
+			Error("[UIActionText] SetTextHAlign failed: m_Text is null!");
+			return;
+		}
+		switch ( type )
+		{
+		case UIActionHAlign.CENTER:
+			m_Text.SetFlags( m_Text.GetFlags() | WidgetFlags.CENTER );
+			break;
+		case UIActionHAlign.RIGHT:
+			m_Text.SetFlags( m_Text.GetFlags() | WidgetFlags.RALIGN );
+			break;
+		}
+	}
+
+	void SetTextVAlign( UIActionVAlign type )
+	{
+		if ( !m_Text )
+		{
+			Error("[UIActionText] SetTextVAlign failed: m_Text is null!");
+			return;
+		}
+		switch ( type )
+		{
+		case UIActionVAlign.CENTER:
+			m_Text.SetFlags( m_Text.GetFlags() | WidgetFlags.VCENTER );
+			break;
+		}
+	}
+
+	//! Colour of the value text, the right-hand half of a label/value row.
+	void SetValueColor( int color )
+	{
+		if ( m_Text )
+			m_Text.SetColor( color );
+	}
+
+	//! Put the value in the label's slot - hard left, right after the icon -
+	//! rather than hard right. A label/value row wants the value on the far
+	//! edge so a column of them lines up; an icon+number pair wants the number
+	//! to read as belonging to the glyph beside it.
+	void SetValueLeftAligned( bool enabled )
+	{
+		m_ValueLeftAligned = enabled;
+
+		if ( m_Text )
+			m_Text.SetText( "" );
+
+		if ( m_Label )
+			m_Label.SetText( "" );
+	}
+
+	override void OnInit()
+	{
+		super.OnInit();
+
+		Class.CastTo( m_Label, layoutRoot.FindAnyWidget( "action_label" ) );
+		Class.CastTo( m_Text,  layoutRoot.FindAnyWidget( "action"       ) );
+		Class.CastTo( m_Icon,  layoutRoot.FindAnyWidget( "action_icon"  ) );
+		Class.CastTo( m_IconRight, layoutRoot.FindAnyWidget( "action_icon_right" ) );
+	}
+
+	override void OnShow()
+	{
+	}
+
+	override void OnHide()
+	{
+	}
+
+	override void SetLabel( string text )
+	{
+		if ( m_Label )
+			m_Label.SetText( text );
+	}
+
+	override void SetText( string text )
+	{
+		m_ActualText = Widget.TranslateString( text );
+
+		//! Both widgets exist either way; only one of them is ever carrying
+		//! text, so the other does not have to be cleared on every set.
+		if ( m_ValueLeftAligned )
+		{
+			if ( m_Label )
+				m_Label.SetText( text );
+
+			return;
+		}
+
+		if ( m_Text )
+			m_Text.SetText( text );
+	}
+
+	override void SetTextFormat( string text, string p1 = "", string p2 = "", string p3 = "", string p4 = "", string p5 = "", string p6 = "", string p7 = "", string p8 = "", string p9 = "" )
+	{
+		m_ActualText = TranslateStringEx( text, p1, p2, p3, p4, p5, p6, p7, p8, p9 );
+
+		//! Both widgets exist either way; only one of them is ever carrying
+		//! text, so the other does not have to be cleared on every set.
+		if ( m_ValueLeftAligned )
+		{
+			if ( m_Label )
+				m_Label.SetTextFormat( text, p1, p2, p3, p4, p5, p6, p7, p8, p9 );
+
+			return;
+		}
+
+		if ( m_Text )
+			m_Text.SetTextFormat( text, p1, p2, p3, p4, p5, p6, p7, p8, p9 );
+	}
+
+	override string GetText()
+	{
+		return m_ActualText;
+	}
+
+	override void SetIcon( string imagePath )
+	{
+		if ( !m_Icon )
+			return;
+
+		if ( imagePath == "" )
+		{
+			m_Icon.Show( false );
+			if ( m_Label )
+				m_Label.SetTextOffset( 10, 0 );
+			return;
+		}
+
+		m_Icon.LoadImageFile( 0, imagePath );
+		m_Icon.Show( true );
+
+		// Push label text right to clear the icon (icon is at x=6, width=20 -> end at 26 + 4 gap = 30)
+		if ( m_Label )
+			m_Label.SetTextOffset( 30, 0 );
+	}
+
+	override bool OnClick(Widget w, int x, int y, int button)
+	{
+		if ( !m_HasCallback )
+		{
+			if ( w == m_Text )
+			{
+				g_Game.CopyToClipboard( m_ActualText );
+			}
+			return false;
+		}
+
+		bool ret = false;
+
+		if ( w == m_Text )
+		{
+			ret = CallEvent( UIEvent.CLICK );
+		}
+
+		return ret;
+	}
+}

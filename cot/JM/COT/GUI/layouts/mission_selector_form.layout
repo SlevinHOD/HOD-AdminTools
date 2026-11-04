@@ -6,11 +6,11 @@ PanelWidgetClass JMMissionSelectorForm {
  size 250 420
  hexactpos 0
  vexactpos 0
- hexactsize 1
- vexactsize 1
+ hexactsize 0
+ vexactsize 0
  draggable 1
  scriptclass "JMMissionSelectorForm"
- style DayZDefaultPanel
+ style COTSurface
  {
   GridSpacerWidgetClass actions_filter_wrapper {
    position 0 0
@@ -25,25 +25,26 @@ PanelWidgetClass JMMissionSelectorForm {
   }
   TextListboxWidgetClass game_missions_list {
    visible 1
-   position 5 35
-   size 240 300
+   position 0 30
+   size 1 1
    hexactpos 1
    vexactpos 1
-   hexactsize 1
-   vexactsize 1
-   style Editor
+   hexactsize 0
+   vexactsize 0
+   style debugUI
    lines 20
    font "gui/fonts/sdf_MetronLight24"
    "exact text" 1
    "exact text size" 16
   }
   GridSpacerWidgetClass actions_wrapper {
-   position 0 340
+   position 0 0
    size 1 60
    hexactpos 1
    vexactpos 1
    hexactsize 0
    vexactsize 1
+   valign bottom_ref
    "Size To Content V" 1
    Columns 1
    Rows 3

@@ -11,7 +11,7 @@ modded class Weapon_Base
 		{
 			if (g_Game.IsServer() && player.COTHasGodMode())
 			{
-				CommunityOnlineToolsBase.HealEntityRecursive(this, true, false);
+				COT_Base.HealEntityRecursive(this, true, false);
 			}
 
 			if (player.COTHasUnlimitedAmmo())
@@ -29,7 +29,28 @@ modded class Weapon_Base
 					}
 				}
 			}
+
+			COT_ReportShotToAntiCheat( player, muzzleType );
 		}
+	}
+
+	//! Feed the anti-cheat infinite-ammo and jam rules: shooter, cartridges left,
+	//! whether this shot jammed, and the weapon's jam chance. COT's own unlimited
+	//! ammo is excluded (an admin decision, like godmode). Reporting only; rules
+	//! live in JMAntiCheatModule. Runs on every trigger pull, keep it cheap.
+	protected void COT_ReportShotToAntiCheat( PlayerBase player, int muzzleType )
+	{
+		if ( !g_Game.IsServer() )
+			return;
+
+		if ( player.COTHasUnlimitedAmmo() )
+			return;
+
+		PlayerIdentity identity = player.GetIdentity();
+		if ( !identity )
+			return;
+
+		JMAntiCheatSignals.ReportShot( identity.GetId(), GetTotalCartridgeCount( muzzleType ), IsJammed(), GetChanceToJam() );
 	}
 
 	TStringArray COTGetMagazineTypesValidated(string name = "magazines", int muzzleIndex = 0)
@@ -45,8 +66,23 @@ modded class Weapon_Base
 		auto magazinesValidated = new TStringArray;
 		foreach (string magazine: magazines)
 		{
-			if (g_Game.ConfigIsExisting("CfgMagazines " + magazine))
+			string path = CFG_MAGAZINESPATH + " " + magazine;
+			if (g_Game.ConfigIsExisting(path))
+			{
+				if ( g_Game.ConfigGetInt( path + " scope" ) != 2 )
+					continue;
+
+				string model;
+				if ( !g_Game.ConfigGetText( path + " model", model ) || model == "" || model == "bmp" )
+					continue;
+
+				string displayName;
+				//! @note ConfigGetText returns already translated values
+				if ( !g_Game.ConfigGetText( path + " displayName", displayName ) || displayName == "" || displayName.IndexOf("$UNT$") > -1 )
+					continue;
+
 				magazinesValidated.Insert(magazine);
+			}
 		}
 		return magazinesValidated;
 	}
@@ -68,30 +104,48 @@ modded class Weapon_Base
 		return magazineType;
 	}
 
+	string COTGetFirstChamberableAmmoTypeName(int muzzleIndex)
+	{
+		TStringArray chamberableFrom = COTGetMagazineTypesValidated("chamberableFrom", muzzleIndex);
+		string ammoType = chamberableFrom[0];
+
+		return COTGetAmmoTypeNameValidated(ammoType);
+	}
+
 	string COTGetRandomChamberableAmmoTypeName(int muzzleIndex)
 	{
 		TStringArray chamberableFrom = COTGetMagazineTypesValidated("chamberableFrom", muzzleIndex);
 		string ammoType = chamberableFrom.GetRandomElement();
-		
-		// Make sure the given ammoType is actually useable
+
+		return COTGetAmmoTypeNameValidated(ammoType);
+	}
+
+	string COTGetAmmoTypeNameValidated(string ammoType)
+	{
 		if (ammoType != "")
 		{
 			//! Ammo_XXX -> Bullet_XXX
 			if (!AmmoTypesAPI.MagazineTypeToAmmoType(ammoType, ammoType))
 			{
-				CF_Log.Info("%1::COTGetRandomChamberableAmmoTypeName - ammo type isn't usable %2", ToString(), ammoType);
+				CF_Log.Info("%1::COTGetAmmoTypeNameValidated - ammo type isn't usable %2", ToString(), ammoType);
 				return "";
 			}
 
-			CF_Log.Info("%1::COTGetRandomChamberableAmmoTypeName - cartridge type %2", ToString(), ammoType);
+			CF_Log.Info("%1::COTGetAmmoTypeNameValidated - cartridge type %2", ToString(), ammoType);
 		}
 
 		return ammoType;
 	}
 
-	//! @note this is a verbatim copy of the vanilla SpawnAttachedMagazine EXCEPT it doesn't use the vanilla GetMaxMagazineTypeName/GetRandomMagazineTypeName
-	//! because those CTD if there are entries in `magazines[]` whose rvConfig classes don't actually exist
 	override Magazine SpawnAttachedMagazine( string magazineType = "", int flags = WeaponWithAmmoFlags.CHAMBER )
+	{
+		return COTSpawnAttachedMagazine(magazineType, flags);
+	}
+
+	//! @note this is a verbatim copy of the vanilla SpawnAttachedMagazine EXCEPT it doesn't use the vanilla GetMaxMagazineTypeName/GetRandomMagazineTypeName
+	//! because those CTD if there are entries in `magazines[]` whose rvConfig classes don't actually exist,
+	//! and has an additional ammoWantedCount parameter
+	Magazine COTSpawnAttachedMagazine( string magazineType = "", int flags = WeaponWithAmmoFlags.CHAMBER, int ammoWantedCount = -1 )
 	{
 		// Check if the gun has any magazines registered in config
 		if ( GetMagazineTypeCount(0) == 0 )
@@ -125,13 +179,22 @@ modded class Weapon_Base
 			ErrorEx(string.Format("Expected magazine, created: %1", GetDebugName(magAI)));
 			return null;
 		}
+
 		
+		int ammoCount;
+		int ammoMax = mag.GetAmmoMax();
+
+		if (ammoWantedCount < 0)
+			ammoCount = ammoMax;
+		else
+			ammoCount = Math.Min(ammoWantedCount, ammoMax);
+
 		// Decide random quantity when enabled
 		if (flags & WeaponWithAmmoFlags.QUANTITY_RNG)
-			mag.ServerSetAmmoCount(Math.RandomIntInclusive(0, mag.GetAmmoMax()));
+			mag.ServerSetAmmoCount(Math.RandomIntInclusive(0, ammoCount));
+		else
+			mag.ServerSetAmmoCount(ammoCount);
 			
-	#ifndef DAYZ_1_27
-		//! 1.28+
 		if(MustBeChambered(0))
 		{
 			string bulletType;
@@ -141,10 +204,9 @@ modded class Weapon_Base
 				FillChamber(bulletType, flags);
 			}
 		}
-	#endif
 		
 		// Fill chamber when flagged
-		if ((flags & WeaponWithAmmoFlags.CHAMBER) || (flags & WeaponWithAmmoFlags.CHAMBER_RNG))
+		if (ammoCount > 0 && ((flags & WeaponWithAmmoFlags.CHAMBER) || (flags & WeaponWithAmmoFlags.CHAMBER_RNG)))
 		{
 			FillChamber(magazineType, flags);
 		}
@@ -156,9 +218,15 @@ modded class Weapon_Base
 		return mag;
 	}
 
-	//! @note this is a verbatim copy of the vanilla FillInnerMagazine EXCEPT it doesn't use the vanilla GetRandomChamberableAmmoTypeName
-	//! because that CTDs if there are entries in `chamberableFrom[]` whose rvConfig classes don't actually exist
 	override bool FillInnerMagazine( string ammoType = "", int flags = WeaponWithAmmoFlags.CHAMBER )
+	{
+		return COTFillInnerMagazine(ammoType, flags);
+	}
+
+	//! @note this is a verbatim copy of the vanilla FillInnerMagazine EXCEPT it doesn't use the vanilla GetRandomChamberableAmmoTypeName
+	//! because that CTDs if there are entries in `chamberableFrom[]` whose rvConfig classes don't actually exist,
+	//! and has an additional ammoWantedCount parameter
+	bool COTFillInnerMagazine(string ammoType = "", int flags = WeaponWithAmmoFlags.CHAMBER, int ammoWantedCount = -1)
 	{
 		CF_Log.Info("%1::FillInnerMagazine(\"%2\", %3)", ToString(), ammoType, flags.ToString());
 	
@@ -180,11 +248,8 @@ modded class Weapon_Base
 		}
 		
 		
-		bool didSomething = false;		
-	#ifndef DAYZ_1_27
-		//! 1.28+
+		bool didSomething = false;
 		bool needUpdateStateMachine = false;
-	#endif
 		int muzzCount = GetMuzzleCount();
 		
 		bool ammoRng = ammoType == "";
@@ -201,11 +266,14 @@ modded class Weapon_Base
 		// Fill the internal magazine
 		for (int i = 0; i < muzzCount; ++i)
 		{
-		#ifndef DAYZ_1_27
-			//! 1.28+
 			bool loadAnyBullet = false;
-		#endif
-			int ammoCount = GetInternalMagazineMaxCartridgeCount(i);
+			int ammoCount;
+			int ammoMax = GetInternalMagazineMaxCartridgeCount(i);
+
+			if (ammoWantedCount < 0)
+				ammoCount = ammoMax;
+			else
+				ammoCount = Math.Min(ammoWantedCount, ammoMax);
 			
 			// Decide random quantity when enabled
 			if ( flags & WeaponWithAmmoFlags.QUANTITY_RNG )
@@ -229,15 +297,10 @@ modded class Weapon_Base
 						continue;
 
 					PushCartridgeToInternalMagazine(i, 0, ammoType);
-				#ifndef DAYZ_1_27
-					//! 1.28+
 					loadAnyBullet = true;
-				#endif
 					didSomething = true;
 				}
 
-			#ifndef DAYZ_1_27
-				//! 1.28+
 				if (loadAnyBullet && MustBeChambered(i))
 				{
 					if ( ammoFullRng )
@@ -246,13 +309,12 @@ modded class Weapon_Base
 					if (ammoType && FillSpecificChamber(i, 0, ammoType))
 						needUpdateStateMachine = true;
 				}
-			#endif
 			}
 		}
 		
 		// Call the chamber method if asked for
 		bool chamber = (flags & WeaponWithAmmoFlags.CHAMBER) || (flags & WeaponWithAmmoFlags.CHAMBER_RNG);
-		if (chamber && FillChamber(ammoType, flags))
+		if (ammoWantedCount != 0 && chamber && FillChamber(ammoType, flags))
 		{
 			didSomething = true;
 		}
@@ -262,16 +324,13 @@ modded class Weapon_Base
 		// Only fix the FSM and Synchronize when absolutely needed
 		if (!didSomething)
 			return false;
-		
-	#ifndef DAYZ_1_27
-		//! 1.28+	
+			
 		if( needUpdateStateMachine )
 		{
 			// FSM cares about chamber state
 			RandomizeFSMState();		
 			Synchronize();
 		}
-	#endif
 		
 		return true;
 	}
@@ -313,7 +372,7 @@ modded class Weapon_Base
 		}
 		
 		// Just so we don't '&' wastefully in a loop
-		bool didSomething = false;		
+		bool didSomething = false;
 		bool chamberFullRng = (flags & WeaponWithAmmoFlags.CHAMBER_RNG_SPORADIC);
 		bool chamberRng = (flags & WeaponWithAmmoFlags.CHAMBER_RNG);
 		bool chamber = (flags & WeaponWithAmmoFlags.CHAMBER);

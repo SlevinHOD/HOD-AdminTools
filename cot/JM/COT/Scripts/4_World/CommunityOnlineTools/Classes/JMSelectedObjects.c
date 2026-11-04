@@ -2,7 +2,6 @@ class JMSelectedObject : Managed
 {
 	int networkLow;
 	int networkHigh;
-
 	Object obj;
 
 	void JMSelectedObject( notnull Object object )
@@ -45,9 +44,9 @@ class JMSelectedObject : Managed
 
 class JMSelectedObjects
 {
-	private ref set< ref JMSelectedObject > m_Objects;
-	private ref set< Object > m_Objs;
-	private ref array< string > m_Players;
+	protected ref set< ref JMSelectedObject > m_Objects;
+	protected ref set< Object > m_Objs;
+	protected ref array< string > m_Players;
 
 	void JMSelectedObjects()
 	{
@@ -61,8 +60,38 @@ class JMSelectedObjects
 
 	void ~JMSelectedObjects()
 	{
+		if ( !g_Game ) return;
+
 		JMScriptInvokers.ADD_OBJECT.Remove( AddObject );
 		JMScriptInvokers.REMOVE_OBJECT.Remove( _RemoveObject );
+	}
+
+	set< ref JMSelectedObject > GetObjects()
+	{
+		return m_Objects;
+	}
+
+	int GetPlayer( string guid )
+	{
+		return m_Players.Find( guid );
+	}
+
+	array< string > GetPlayers(bool autoSelect = true)
+	{
+		if (autoSelect && !m_Players.Count())
+		{
+			if (IsMissionOffline())
+				m_Players.Insert(JMConstants.OFFLINE_GUID);
+			else if (GetPermissionsManager().GetClientGUID())
+				m_Players.Insert(GetPermissionsManager().GetClientGUID());
+		}
+
+		return m_Players;
+	}
+
+	array< string > GetPlayersOrSelf()
+	{
+		return GetPlayers(true);
 	}
 
 	bool IsObjectSelected( notnull Object obj )
@@ -71,6 +100,11 @@ class JMSelectedObjects
 			return true;
 
 		return false;
+	}
+
+	bool IsSelected( string guid )
+	{
+		return m_Players.Find( guid ) > -1;
 	}
 
 	void AddObject( Object obj )
@@ -82,7 +116,7 @@ class JMSelectedObjects
 		}
 	}
 
-	private void _RemoveObject( Object obj, int netLow, int netHigh )
+	protected void _RemoveObject( Object obj, int netLow, int netHigh )
 	{
 		if (obj)
 			RemoveObject( obj );
@@ -124,7 +158,7 @@ class JMSelectedObjects
 		return false;
 	}
 
-	void SerializeObjects( ParamsWriteContext ctx )
+	void SerializeObjects( ParamsWriteContext ctx, out set< Object > localObjects = null )
 	{
 		set<ref JMSelectedObject> objects = new set<ref JMSelectedObject>;
 
@@ -132,7 +166,12 @@ class JMSelectedObjects
 		foreach (JMSelectedObject selectedObj: m_Objects)
 		{
 			if (!Class.CastTo(player, selectedObj.obj) || !player.GetIdentity())
-				objects.Insert(selectedObj);
+			{
+				if (selectedObj.networkLow || selectedObj.networkHigh)
+					objects.Insert(selectedObj);
+				else if (localObjects && selectedObj.obj)
+					localObjects.Insert(selectedObj.obj);
+			}
 		}
 		
 		int count = objects.Count();
@@ -166,16 +205,6 @@ class JMSelectedObjects
 		return true;
 	}
 
-	bool IsSelected( string guid )
-	{
-		return m_Players.Find( guid ) > -1;
-	}
-
-	int GetPlayer( string guid )
-	{
-		return m_Players.Find( guid );
-	}
-
 	int AddPlayer( string guid )
 	{
 		int idx = m_Players.Find( guid );
@@ -198,29 +227,6 @@ class JMSelectedObjects
 	int NumPlayers(bool autoSelect = true)
 	{
 		return GetPlayers(autoSelect).Count();
-	}
-
-	array< string > GetPlayers(bool autoSelect = true)
-	{
-		if (autoSelect && !m_Players.Count())
-		{
-			if (IsMissionOffline())
-				m_Players.Insert(JMConstants.OFFLINE_GUID);
-			else if (GetPermissionsManager().GetClientGUID())
-				m_Players.Insert(GetPermissionsManager().GetClientGUID());
-		}
-
-		return m_Players;
-	}
-
-	array< string > GetPlayersOrSelf()
-	{
-		return GetPlayers(true);
-	}
-
-	set< ref JMSelectedObject > GetObjects()
-	{
-		return m_Objects;
 	}
 
 	void ClearPlayers()

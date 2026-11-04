@@ -1,44 +1,55 @@
+//! Archetype B: a fixed toolbar over a tabbed pane.
+//! Tabs live in JMESPFormTab*.c. Stays here: the shared toolbar, the deprecated IconForViewType
+//! forwarder, and DeleteSelected/MoveToCursor/*_Confirm/PromptSendMessage (JMConfirmation calls
+//! back on the object its window was Init()'d with; PromptSendMessage is also called by JMESPActionMenu).
 class JMESPForm: JMFormBase
 {
-	private autoptr array< ref JMESPViewTypeWidget > m_ESPTypeList;
-	private ref map<typename, JMESPViewTypeWidget> m_ESPTypeWidgetsByType;
+	//! Tab indices - what the strip's AddTab() returned for each tab, never written as numbers.
+	protected int m_TabIdFilters;
+	protected int m_TabIdObjects;
+	protected int m_TabIdSettings;
 
-	private UIActionScroller m_ESPListScroller;
-	private Widget m_ESPListRows;
+	//! Height of panel_top in esp_form.layout. The tab strip below is pinned
+	//! against it in OnResize; keep the two in step.
+	static const int TOOLBAR_HEIGHT = 44;
 
-	private UIActionScroller m_ESPSelectedObjects;
+	// -- Toolbar (panel_top) --------------------------------------------------
+	protected ref UIActionFlexRow m_ToolbarRow;
+	protected UIActionButton m_ToggleButton;
+	protected UIActionSearchBox m_SearchBox;
 
-	private UIActionSelectBox m_slbx_PlayerSkeletons;
-	private UIActionSelectBox m_slbx_Skeletons_LineThickness;
+	//! Every spawnable classname, scanned once and handed to the search box as
+	//! its suggestion set. Null until the first keystroke - the walk covers
+	//! four config trees and is far too slow to pay for at form open.
+	protected ref TStringArray m_ClassnameSuggestions;
 
-	private UIActionButton m_btn_Toggle;
-	
-	private UIActionCheckbox m_chkbx_Refresh;
-	private UIActionSlider m_sldr_Refresh;
+	//! protected, not private: sub-mods reach for the module through the form.
+	//! Also public enough (no modifier) for the three tab classes to reach it
+	//! through their back-reference.
+	JMESPModule m_Module;
+	JMLoadoutModule m_LoadoutModule;
+	protected UIActionTabs m_Tabs;
 
-	private UIActionSlider m_sldr_Radius;
+	//! One class per tab, in its own file - only this form constructs/
+	//! dispatches to them. Not private: the toolbar/lifecycle forwarders
+	//! below read them, and so do the JMESPViewTypeWidget forwarders.
+	ref JMESPFormTabFilters  m_TabFilters;
+	ref JMESPFormTabObjects  m_TabObjects;
+	ref JMESPFormTabSettings m_TabSettings;
 
-	private UIActionCheckbox m_DisableSafetyCheckbox;
-
-	private UIActionButton m_ExportButton;
-	private UIActionSelectBox m_ExportTypeList;
-
-	private JMESPModule m_Module;
-	private JMLoadoutModule m_LoadoutModule;
-
-	private UIActionEditableTextPreview m_SearchBox;
+	//! Last content height OnResize reported. Public: JMESPFormTabObjects's
+	//! ApplyObjectListHeight() needs it to size the object list.
+	float m_ContentHeight;
+	protected string m_PendingMsgPlayerGUID;
 
 	void JMESPForm()
 	{
-		m_ESPTypeList = new array< ref JMESPViewTypeWidget >;
-		m_ESPTypeWidgetsByType = new map<typename, JMESPViewTypeWidget>;
-
-		JMScriptInvokers.ESP_VIEWTYPE_CHANGED.Insert(OnESPViewTypeChanged);
+		JMScriptInvokers.ESP_VIEWTYPE_CHANGED.Insert( OnESPViewTypeChanged );
 	}
 
 	void ~JMESPForm()
 	{
-		JMScriptInvokers.ESP_VIEWTYPE_CHANGED.Remove(OnESPViewTypeChanged);
+		JMScriptInvokers.ESP_VIEWTYPE_CHANGED.Remove( OnESPViewTypeChanged );
 	}
 
 	protected override bool SetModule( JMRenderableModuleBase mdl )
@@ -46,173 +57,140 @@ class JMESPForm: JMFormBase
 		return Class.CastTo( m_Module, mdl );
 	}
 
-	private void ESPControls( Widget parent )
-	{
-		Widget mainSpacer = UIActionManager.CreateGridSpacer( parent, 5, 1 );
-
-		Widget quadSpacer = UIActionManager.CreateGridSpacer( mainSpacer, 3, 2 );
-		
-		m_btn_Toggle = UIActionManager.CreateButton( quadSpacer, "#STR_COT_ESP_MODULE_TOGGLE", this, "Click_UpdateESP" );
-
-		Widget checkboxesSpacer = UIActionManager.CreateGridSpacer( quadSpacer, 2, 1 );
-
-		UIActionManager.CreateCheckbox( checkboxesSpacer, "#STR_COT_ESP_MODULE_TOGGLE_CLASS_NAME", this, "Click_UseClassName", JMESPWidgetHandler.UseClassName );
-		m_DisableSafetyCheckbox = UIActionManager.CreateCheckbox( checkboxesSpacer, "#STR_COT_ESP_MODULE_TOGGLE_SAFETY", this, "Click_DisableSafety", m_Module.GetFilterSafetyState() );
-
-		m_chkbx_Refresh = UIActionManager.CreateCheckbox( quadSpacer, "#STR_COT_ESP_MODULE_TOGGLE_AUTO_REFRESH", this, "Click_UpdateAtRate", m_Module.GetState() == JMESPState.Update );
-		m_sldr_Refresh = UIActionManager.CreateSlider( quadSpacer, "", 1.0, 10.0, this, "Change_UpdateRate" );
-		m_sldr_Refresh.SetCurrent( m_Module.ESPUpdateTime );
-		m_sldr_Refresh.SetFormat("#STR_COT_FORMAT_SECOND_LONG");
-		m_sldr_Refresh.SetStepValue( 1.0 );
-
-		Widget skeletonSpacer = UIActionManager.CreateGridSpacer( mainSpacer, 1, 2 );
-
-		m_slbx_PlayerSkeletons = UIActionManager.CreateSelectionBox( skeletonSpacer, "#STR_COT_ESP_MODULE_DRAW_PLAYER_SKELETONS", {"#STR_COT_GENERIC_NONE", "#STR_COT_GENERIC_OTHERS", "#STR_COT_GENERIC_ALL"}, this, "Change_PlayerSkeletons" );
-		m_slbx_PlayerSkeletons.SetSelectorWidth(0.4);
-		int idx = m_Module.GetDrawPlayerSkeletonsEnabled();
-		if (idx)
-			idx += m_Module.DrawPlayerSkeletonsIncludingMyself;
-		m_slbx_PlayerSkeletons.SetSelection(idx, false);
-		m_slbx_Skeletons_LineThickness = UIActionManager.CreateSelectionBox( skeletonSpacer, "#STR_COT_GENERIC_LINE_THICKNESS", {"1", "2", "3", "4"}, this, "Change_Skeleton_LineThickness" );
-		m_slbx_Skeletons_LineThickness.SetSelectorWidth(0.4);
-		m_slbx_Skeletons_LineThickness.SetSelection( m_Module.SkeletonLineThickness - 1 );
-
-		Widget filterSpacer = UIActionManager.CreateGridSpacer( mainSpacer, 1, 2 );
-
-		m_sldr_Radius = UIActionManager.CreateSlider( filterSpacer, "#STR_COT_ESP_MODULE_RADIUS", 0, m_Module.GetMaxRadius(), this, "Change_Range" );
-		m_sldr_Radius.SetCurrent( m_Module.ESPRadius );
-		m_sldr_Radius.SetFormat("#STR_COT_FORMAT_METRE_LONG");
-		m_sldr_Radius.SetStepValue( 10.0 );
-
-		Widget searchSpacer = UIActionManager.CreateWrapSpacerCompact( filterSpacer, WidgetAlignment.WA_LEFT, WidgetAlignment.WA_CENTER );
-		m_SearchBox = UIActionManager.CreateEditableTextPreview( searchSpacer, "#STR_COT_ESP_MODULE_CLASS_FILTER", this, "Change_Filter", m_Module.Filter );
-		m_SearchBox.SetWidth( 0.91 );
-		UIActionImageButton button = UIActionManager.CreateImageButton( searchSpacer, "set:dayz_gui image:icon_x", this, "Reset_Filter" );
-		button.SetFixedSize( 28, 28 );
-	
-		UIActionManager.CreatePanel( mainSpacer, 0xFF000000, 3 );
-
-		Widget headingSpacer = UIActionManager.CreateGridSpacer( mainSpacer, 1, 2 );
-		UIActionManager.CreateText( headingSpacer, "#STR_COT_ESP_MODULE_FILTERS_HEADER", "" );
-		UIActionManager.CreateText( headingSpacer, "#STR_COT_ESP_MODULE_ACTIONS_HEADER", "" );
-	}
-
-	private void ESPFilters( Widget parent )
-	{
-		#ifdef COT_DEBUGLOGS
-		Print( "+" + this + "::ESPFilters" );
-		#endif
-
-		m_ESPListScroller = UIActionManager.CreateScroller( parent );
-		Widget container = m_ESPListScroller.GetContentWidget();
-
-		Widget rowSelectors = UIActionManager.CreateGridSpacer( container, 1, 2 );
-		UIActionManager.CreateButton( rowSelectors, "#STR_COT_ESP_MODULE_ACTION_SELECT_ALL", this, "Click_ESPSelectAll" );
-		UIActionManager.CreateButton( rowSelectors, "#STR_COT_ESP_MODULE_ACTION_DESELECT_ALL", this, "Click_ESPDeselectAll" );
-
-		m_ESPListRows = UIActionManager.CreateActionRows( container );
-
-		int totalInContentRow = 100;
-		int currentContentRow = 0;
-
-		GridSpacerWidget gsw;
-		auto viewTypes = m_Module.GetViewTypes();
-
-		foreach (auto viewType: viewTypes)
-		{
-			if ( totalInContentRow >= 100 )
-			{
-				Class.CastTo( gsw, m_ESPListRows.FindAnyWidget( "Content_Row_0" + currentContentRow ) );
-				gsw.Show( true );
-				currentContentRow++;
-				totalInContentRow = 0;
-			}
-
-			Widget rWidget = g_Game.GetWorkspace().CreateWidgets( "JM/COT/GUI/layouts/esp_type_widget.layout", gsw );
-			
-			if ( !rWidget )
-				continue;
-
-			JMESPViewTypeWidget rScript;
-			rWidget.GetScript( rScript );
-
-			if ( !rScript )
-				continue;
-
-			rScript.Set( viewType );
-
-			m_ESPTypeList.Insert( rScript );
-			m_ESPTypeWidgetsByType[viewType.Type()] = rScript;
-		}
-
-		m_ESPListScroller.UpdateScroller();
-
-		#ifdef COT_DEBUGLOGS
-		Print( "-" + this + "::ESPFilters" );
-		#endif
-	}
-
-	private void ESPSelectedObjects( Widget parent )
-	{
-		m_ESPSelectedObjects = UIActionManager.CreateScroller( parent );
-		Widget container = m_ESPSelectedObjects.GetContentWidget();
-		
-		UIActionManager.CreateText(container,"Visible Items");
-		Widget rowSelectors = UIActionManager.CreateGridSpacer( container, 1, 2 );
-		UIActionManager.CreateButton( rowSelectors, "#STR_COT_ESP_MODULE_ACTION_SELECT_ALL", this, "Click_SelectAll" );
-		UIActionManager.CreateButton( rowSelectors, "#STR_COT_ESP_MODULE_ACTION_DESELECT_ALL", this, "Click_DeselectAll" );
-
-		UIActionManager.CreateText(container,"Selected Items");
-	
-		Widget rowExports = UIActionManager.CreateGridSpacer( container, 1, 2 );
-		m_ExportButton = UIActionManager.CreateButton( rowExports, "#STR_COT_TO_CLIPBOARD", this, "Click_CopyToClipboard" );
-		TStringArray exportChoices = {
-			"Raw",
-			"SpawnableTypes",
-		#ifdef DZ_Expansion_Market
-			"Exp Market",
-		#endif
-		#ifdef DZ_Expansion_Core
-			"Exp Loadout",
-		#endif
-			"#STR_COT_LOADOUT_MODULE_NAME"
-		};
-		m_ExportTypeList = UIActionManager.CreateSelectionBox( rowExports, "", exportChoices, this, "Click_ExportType" );
-		m_ExportTypeList.SetSelectorWidth(1.0);
-
-		Widget rowMisc = UIActionManager.CreateWrapSpacerFit( container );
-		UIActionManager.CreateButton( rowMisc, "#STR_COT_ESP_MODULE_ACTION_MOVE_TO_CROSSHAIR", this, "Click_MoveToCursor" );
-		UIActionButton delbtn = UIActionManager.CreateButton( rowMisc, "#STR_COT_ESP_MODULE_ACTION_DELETE_SELECTED", this, "Click_DeleteSelected" );
-		delbtn.SetColor(COLOR_RED);
-
-		m_ESPSelectedObjects.UpdateScroller();
-	}
-
-	override void OnInit()
+	override void OnCreate()
 	{
 		JMESPWidgetHandler.espMenu = this;
 
-		ESPControls( layoutRoot.FindAnyWidget( "panel_top" ) );
+		InitWidgetsTop();
+		InitWidgetsBottom();
 
-		Widget left_bottom = g_Game.GetWorkspace().CreateWidgets( "JM/COT/GUI/layouts/uiactions/UIPanel.layout", layoutRoot.FindAnyWidget( "panel_bottom" ) );
-		Widget right_bottom = g_Game.GetWorkspace().CreateWidgets( "JM/COT/GUI/layouts/uiactions/UIPanel.layout", layoutRoot.FindAnyWidget( "panel_bottom" ) );
+		Class.CastTo( m_LoadoutModule, GetModuleManager().GetModule( JMLoadoutModule ) );
+	}
 
-		left_bottom.SetSize( 0.5, 1.0 );
-		right_bottom.SetSize( 0.5, 1.0 );
-		left_bottom.SetPos( 0.0, 0.0 );
-		right_bottom.SetPos( 0.5, 0.0 );
+	// =========================================================================
+	//  Toolbar
+	// =========================================================================
 
-		ESPFilters( left_bottom );
-		ESPSelectedObjects( right_bottom );
-		
-		Class.CastTo(m_LoadoutModule, GetModuleManager().GetModule(JMLoadoutModule));
+	protected void InitWidgetsTop()
+	{
+		Widget top = layoutRoot.FindAnyWidget( "panel_top" );
+
+		m_ToolbarRow = UIActionManager.CreateFlexRow( top, WidgetAlignment.WA_LEFT, WidgetAlignment.WA_CENTER );
+		Widget row = m_ToolbarRow.GetContent();
+
+		m_ToggleButton = UIActionManager.CreateButton( row, "#STR_COT_ESP_MODULE_TOGGLE", this, "" );
+		if ( m_ToggleButton ) m_ToggleButton.SetOnClick( this, "OnClick_UpdateESP" );
+		m_ToggleButton.SetFlex( 0, 150, 150 );
+		m_ToggleButton.SetIcon( JMConstants.Lucide( "eye" ) );
+		m_ToggleButton.SetTooltip( "#STR_COT_ESP_MODULE_TT_TOGGLE_ESP" );
+		m_ToolbarRow.Add( m_ToggleButton );
+		BindPermission( m_ToggleButton, JMConstants.PERM_ESP_VIEW );
+
+		//! UIActionSearchBox carries its own inline clear, so there is no
+		//! separate 'x' button beside it any more.
+		//! Placeholder names what it filters; the form has two other search boxes.
+		m_SearchBox = UIActionManager.CreateSearchBox( row, this, "OnChange_Filter", "#STR_COT_ESP_MODULE_CLASS_FILTER", m_Module.Filter );
+		m_SearchBox.SetFlex( 1.0, 120 );
+		m_SearchBox.SetTooltip( "#STR_COT_ESP_MODULE_TT_CLASS_FILTER" );
+		m_ToolbarRow.Add( m_SearchBox );
+
+		//! Anchored to the window root so the suggestion list floats over the
+		//! tabs below instead of being clipped by the toolbar strip.
+		if ( GetWindow() )
+		{
+			m_SearchBox.InitSuggestionList( GetWindow().GetWidgetRoot() );
+			m_SearchBox.SetMaxVisibleSuggestions( 10 );
+			AddOverlay( m_SearchBox );
+		}
+
+		m_ToolbarRow.SetGap( 10 );
+
+		//! Paint it now rather than waiting for the first UpdateUI tick, which
+		//! is up to 500ms away - long enough to see the placeholder label.
+		ApplyToggleFace();
+	}
+
+	protected void InitWidgetsBottom()
+	{
+		Widget panelFilters  = layoutRoot.FindAnyWidget( "esp_filters_panel" );
+		Widget panelObjects  = layoutRoot.FindAnyWidget( "esp_objects_panel" );
+		Widget panelSettings = layoutRoot.FindAnyWidget( "esp_settings_panel" );
+
+
+		m_BottomTabStrip = layoutRoot.FindAnyWidget( "panel_bottom_tabs" );
+		m_BottomContent  = layoutRoot.FindAnyWidget( "panel_bottom_content" );
+
+		m_Tabs = UIActionManager.CreateTabStrip( m_BottomTabStrip, this, "OnChange_Tab" );
+
+		m_TabIdFilters = m_Tabs.AddTab( "#STR_COT_ESP_TAB_FILTERS", JMConstants.Lucide( "filter" ), panelFilters );
+		m_TabIdObjects = m_Tabs.AddTab( "#STR_COT_ESP_TAB_VISIBLE", JMConstants.Lucide( "eye" ), panelObjects );
+		m_TabIdSettings = m_Tabs.AddTab( "#STR_COT_ESP_TAB_SETTINGS", JMConstants.Lucide( "settings" ), panelSettings );
+
+		DeclareTabs( 3 );
+
+		m_Tabs.SetSelection( m_TabIdFilters, false );
+
+		InitTabFocus( m_TabIdFilters );
+	}
+
+	// =========================================================================
+	//  Tabs & lifecycle
+	// =========================================================================
+
+	override protected void OnTabCreate( int tab, Widget panel )
+	{
+		if ( tab == m_TabIdFilters )
+		{
+			m_TabFilters = new JMESPFormTabFilters( this );
+			RegisterTab( m_TabIdFilters, m_TabFilters );
+			m_TabFilters.OnCreate( panel );
+		}
+		else if ( tab == m_TabIdObjects )
+		{
+			m_TabObjects = new JMESPFormTabObjects( this );
+			RegisterTab( m_TabIdObjects, m_TabObjects );
+			m_TabObjects.OnCreate( panel );
+		}
+		else if ( tab == m_TabIdSettings )
+		{
+			m_TabSettings = new JMESPFormTabSettings( this );
+			RegisterTab( m_TabIdSettings, m_TabSettings );
+			m_TabSettings.OnCreate( panel );
+		}
+
+		UpdateUI();
+	}
+
+	protected override COT_ScriptedWidgetEventHandler GetTabStrip()
+	{
+		return m_Tabs;
+	}
+
+	void OnChange_Tab( UIEvent eid, UIActionBase action )
+	{
+		if ( eid == UIEvent.CHANGE )
+			HandleTabChange();
+	}
+
+	override void OnResize( float w, float h )
+	{
+		super.OnResize( w, h );
+
+		PinBottomPanelGeometry( h - JMUILayout.Px( TOOLBAR_HEIGHT ) );
+
+		if ( m_ToolbarRow )
+			m_ToolbarRow.Layout();
+
+		m_ContentHeight = h;
+
+		ResizeTabs( w, h );
 	}
 
 	override void OnShow()
 	{
 		super.OnShow();
 
-		g_Game.GetCallQueue( CALL_CATEGORY_GUI ).CallLater( UpdateUI, 500, true );
+		DeferCall( "UpdateUI", 500, true );
 
 		UpdateUI();
 	}
@@ -221,384 +199,227 @@ class JMESPForm: JMFormBase
 	{
 		super.OnHide();
 
-		g_Game.GetCallQueue( CALL_CATEGORY_GUI ).Remove( UpdateUI );
+		CancelDeferredCall( "UpdateUI" );
 	}
 
+	//! Kept because JMESPModule.OnClientPermissionsUpdated calls it. The
+	//! per-control work it used to stand in for is now done by the base's
+	//! registered-permission walk.
 	void DisableToggleableOptions()
 	{
 	}
 
-	void OnESPViewTypeChanged(JMESPViewType viewType)
+	override void OnClientPermissionsUpdated()
 	{
-		UpdateMaxRange();
+		super.OnClientPermissionsUpdated();
+
+		if ( m_TabFilters )
+			m_TabFilters.RefreshGroupHeaders();
+
+		UpdateUI();
 	}
 
-	void UpdateUI()
+	void OnESPViewTypeChanged( JMESPViewType viewType )
 	{
-		m_sldr_Radius.SetCurrent( m_Module.ESPRadius );
-		m_sldr_Refresh.SetCurrent( m_Module.ESPUpdateTime );
+		if ( m_TabSettings )
+			m_TabSettings.UpdateMaxRange();
+	}
+
+	//! Paint the toolbar toggle to say, in one glance, whether ESP is currently
+	//! drawing and what clicking will do about it.
+	protected void ApplyToggleFace()
+	{
+		if ( !m_ToggleButton )
+			return;
 
 		if ( m_Module.GetState() != JMESPState.Remove )
 		{
-			m_btn_Toggle.SetButton( "#STR_COT_ESP_MODULE_ACTION_CLEAR_ESP" );
-			m_btn_Toggle.SetColor(COLOR_RED_A);
+			m_ToggleButton.SetButton( "#STR_COT_ESP_MODULE_STATE_ON" );
+			m_ToggleButton.SetIcon( JMConstants.Lucide( "eye" ) );
+			m_ToggleButton.SetColor( JMTheme.SUCCESS_FILL );
+			m_ToggleButton.SetTooltip( "#STR_COT_ESP_MODULE_TT_STATE_ON" );
 		}
 		else
 		{
-			m_btn_Toggle.SetColor(COLOR_GREEN_A);
-			if ( m_chkbx_Refresh.IsChecked() )
-			{
-				m_btn_Toggle.SetButton( "#STR_COT_ESP_MODULE_ACTION_SHOW_ESP" );
-
-				m_sldr_Refresh.Enable();
-			}
-			else
-			{
-				m_btn_Toggle.SetButton( "#STR_COT_ESP_MODULE_ACTION_SHOW_ESP" );
-
-				m_sldr_Refresh.SetColor(COLOR_WHITE);
-				m_sldr_Refresh.Disable();
-			}
+			m_ToggleButton.SetButton( "#STR_COT_ESP_MODULE_STATE_OFF" );
+			m_ToggleButton.SetIcon( JMConstants.Lucide( "eye-off" ) );
+			m_ToggleButton.SetColor( JMTheme.BUTTON_FILL );
+			m_ToggleButton.SetTooltip( "#STR_COT_ESP_MODULE_TT_STATE_OFF" );
 		}
 	}
 
+	//! Runs on a 500ms timer while the form is open, so every widget it touches
+	//! can belong to a tab that has never been built.
+	void UpdateUI()
+	{
+		if ( m_TabSettings )
+			m_TabSettings.RefreshSliders();
+
+		UpdateActiveTab();
+
+		ApplyToggleFace();
+	}
+
+	//! Feed the search box its suggestion set, building it on the first call.
 	void UpdateList()
 	{
-		string closestMatch;
+		if ( !m_SearchBox )
+			return;
 
-		string strSearch = m_SearchBox.GetText();
+		if ( m_ClassnameSuggestions )
+			return;
 
-		if ( strSearch != "" )
+		m_ClassnameSuggestions = new TStringArray;
+
+		TStringArray configs = new TStringArray;
+		configs.Insert( CFG_VEHICLESPATH );
+		configs.Insert( CFG_WEAPONSPATH );
+		configs.Insert( CFG_MAGAZINESPATH );
+		configs.Insert( CFG_NONAI_VEHICLES );
+
+		for ( int nConfig = 0; nConfig < configs.Count(); nConfig++ )
 		{
-			TStringArray configs = new TStringArray;
-			configs.Insert( CFG_VEHICLESPATH );
-			configs.Insert( CFG_WEAPONSPATH );
-			configs.Insert( CFG_MAGAZINESPATH );
-			configs.Insert( CFG_NONAI_VEHICLES );
+			string strConfigPath = configs.Get( nConfig );
 
-			strSearch.ToLower();
+			int nClasses = g_Game.ConfigGetChildrenCount( strConfigPath );
 
-			for ( int nConfig = 0; nConfig < configs.Count(); nConfig++ )
+			//! The first twenty entries of the vehicles tree are the abstract
+			//! bases, which are not spawnable and never worth suggesting.
+			int nClassStart = 0;
+			if ( nConfig == 0 ) nClassStart = 20;
+
+			for ( int nClass = nClassStart; nClass < nClasses; nClass++ )
 			{
-				string strConfigPath = configs.Get( nConfig );
+				string strName;
 
-				int nClasses = g_Game.ConfigGetChildrenCount( strConfigPath );
+				g_Game.ConfigGetChildName( strConfigPath, nClass, strName );
 
-				int nClassStart = 0;
-				if (nConfig == 0) nClassStart = 20;
+				int scope = g_Game.ConfigGetInt( strConfigPath + " " + strName + " scope" );
 
-				for ( int nClass = nClassStart; nClass < nClasses; nClass++ )
-				{
-					string strName;
+				if ( scope == 0 )
+					continue;
 
-					g_Game.ConfigGetChildName( strConfigPath, nClass, strName );
+				if ( !g_Game.ConfigIsExisting( strConfigPath + " " + strName + " model" ) )
+					continue;
 
-					int scope = g_Game.ConfigGetInt( strConfigPath + " " + strName + " scope" );
-
-					if ( scope == 0 )
-						continue;
-
-					if ( !g_Game.ConfigIsExisting( strConfigPath + " " + strName + " model" ) )
-						continue;
-
-					string strNameLower = strName;
-
-					strNameLower.ToLower();
-
-					if ( strNameLower == strSearch )
-					{
-						closestMatch = strNameLower;
-						break;  //! We can end the search here because we got a perfect match
-					}
-					else if ( strNameLower.IndexOf(strSearch) == 0 )
-					{
-						if (!closestMatch || strNameLower.Length() < closestMatch.Length())
-							closestMatch = strNameLower;
-					}
-				}
+				m_ClassnameSuggestions.Insert( strName );
 			}
 		}
 
-		m_SearchBox.SetTextPreview(closestMatch);
+		m_SearchBox.SetSuggestions( m_ClassnameSuggestions );
 	}
 
-	void Click_UpdateESP( UIEvent eid, UIActionBase action )
+	// =========================================================================
+	//  Toolbar handlers
+	// =========================================================================
+
+	void OnClick_UpdateESP( UIActionBase action )
 	{
-		if ( eid != UIEvent.CLICK )
+		if ( !JMPermissions.Has( JMConstants.PERM_ESP_VIEW ) )
 			return;
 
 		if ( m_Module.GetState() != JMESPState.Remove )
 		{
 			m_Module.UpdateState( JMESPState.Remove );
-
 			m_Module.Log( "Clearing ESP" );
 		} else
 		{
-			if ( m_chkbx_Refresh.IsChecked() )
+			bool autoRefresh = m_TabSettings && m_TabSettings.IsAutoRefreshChecked();
+
+			if ( autoRefresh )
 			{
 				m_Module.UpdateState( JMESPState.Update );
-
 				m_Module.Log( "ESP updating" );
 			}
 			else
 			{
 				m_Module.UpdateState( JMESPState.View );
-
 				m_Module.Log( "Viewing ESP" );
 			}
 		}
 
 		UpdateUI();
 	}
-	
-	void Change_Filter( UIEvent eid, UIActionBase action )
+
+	void OnChange_Filter( UIEvent eid, UIActionBase action )
 	{
 		if ( eid != UIEvent.CHANGE )
 			return;
+
+		UpdateList();
 
 		m_Module.Filter = action.GetText();
-		UpdateList();
 	}
 
-	void Reset_Filter( UIEvent eid, UIActionBase action )
+	// =========================================================================
+	//  Confirmation-callback chain and external API - stay here, see file
+	//  header.
+	// =========================================================================
+
+	void OnClick_DuplicateSelected( UIEvent eid, UIActionBase action )
 	{
 		if ( eid != UIEvent.CLICK )
 			return;
 
-		m_SearchBox.SetText("");
-		m_Module.Filter = "";
-		UpdateList();
-	}
-
-	void Change_UpdateRate( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CHANGE )
-			return;
-		
-		if ( m_sldr_Refresh.GetCurrent() > 0 )
-			m_sldr_Refresh.SetColor(COLOR_WHITE);
-		else
-			m_sldr_Refresh.SetColor(COLOR_RED_A);
-
-		m_Module.ESPUpdateTime = action.GetCurrent();
-	}
-
-	void Change_Range( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CHANGE )
-			return;
-		
-		m_Module.ESPRadius = action.GetCurrent();
-	}
-
-	void Click_DisableSafety( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
-		
-		m_Module.SetFilterSafetyState(action.IsChecked());
-	}
-
-	void UpdateMaxRange()
-	{
-		float maxRadius = m_Module.GetMaxRadius();
-		if (m_Module.ESPRadius > maxRadius)
-			m_Module.ESPRadius = maxRadius;
-		m_sldr_Radius.SetMinMax(m_sldr_Radius.GetMin(), maxRadius);
-		m_sldr_Radius.SetCurrent(m_Module.ESPRadius);
-	}	
-
-	void Click_UseClassName( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
-		
-		JMESPWidgetHandler.UseClassName = action.IsChecked();
-	}
-
-	void Click_UpdateAtRate( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
-
-		if ( m_Module.GetState() != JMESPState.Remove )
-		{
-			if ( action.IsChecked() )
-			{
-				m_sldr_Refresh.Enable();
-				m_Module.UpdateState( JMESPState.Update );
-			}
-			else
-			{
-				m_sldr_Refresh.Disable();
-				m_Module.UpdateState( JMESPState.View );
-			}
-		}
-		
-		UpdateUI();
-	}
-	
-	void Change_PlayerSkeletons( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CHANGE )
-			return;
-
-		int idx = action.GetSelection();
-		if (idx > 0 && !m_ESPTypeWidgetsByType[JMESPViewTypePlayerAI].IsChecked())
-			m_ESPTypeWidgetsByType[JMESPViewTypePlayer].SetChecked(true);
-
-		m_Module.SetDrawPlayerSkeletonsEnabled(idx > 0);
-		m_Module.DrawPlayerSkeletonsIncludingMyself = idx > 1;
-	}
-
-	void Click_ExportType( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CHANGE )
-			return;
-
-		if (m_ExportTypeList.GetSelection() == COT_ESPMode.CREATELOADOUT)
-			m_ExportButton.SetButton("#STR_COT_SAVE_AS");
-		else
-			m_ExportButton.SetButton("#STR_COT_TO_CLIPBOARD");
-	}	
-
-	void Change_Skeleton_LineThickness( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CHANGE )
-			return;
-		
-		m_Module.SkeletonLineThickness = action.GetSelection() + 1;
-	}
-	
-	void Click_DuplicateSelected( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
+		if ( !JMPermissions.Has( JMConstants.PERM_ESP_OBJECT_DUPLICATEALL ) )
 			return;
 
 		m_Module.DuplicateSelected();
-	}
-	
-	void Click_ESPDeselectAll( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
-
-		foreach(JMESPViewTypeWidget espType: m_ESPTypeList)
-			espType.SetChecked(false);
-	}
-	
-	void Click_ESPSelectAll( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
-
-		foreach(JMESPViewTypeWidget espType: m_ESPTypeList)
-			espType.SetChecked(true);
-	}
-	
-	void Click_DeleteSelected( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
-
-		CreateAdvancedObjectConfirm("DeleteSelected", "DeleteSelected");
 	}
 
 	void DeleteSelected()
 	{
 		m_Module.DeleteSelected();
-	}
-	
-	void Click_SelectAll( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
 
-		auto node = JMESPMeta.s_JM_All.m_Head;
-		while ( node )
-		{
-			if ( node.m_Value.widgetRoot.IsVisible() )
-				node.m_Value.widgetHandler.Select();
-			
-			node = node.m_Next;
-		}
-	}
-	
-	void Click_DeselectAll( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
-
-		auto node = JMESPMeta.s_JM_All.m_Head;
-		while ( node )
-		{
-			node.m_Value.widgetHandler.Deselect();
-			node = node.m_Next;
-		}
-
-		// Some scenarios require this to prevent unexpected results for the end user
-		JM_GetSelected().ClearObjects();
-	}
-	
-	void Click_MoveToCursor( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
-
-		CreateAdvancedObjectConfirm("MoveToCursor", "MoveToCursor");
+		if ( m_TabObjects )
+			m_TabObjects.RefreshList();
 	}
 
 	void MoveToCursor()
 	{
-		vector dir = g_Game.GetCurrentCameraDirection();
-		vector from = g_Game.GetCurrentCameraPosition(); 
-		vector to = from + ( dir * 1000 );   
-		vector contact_pos;
-		vector contact_dir;
-		int contact_component;
-		
-		if ( DayZPhysics.RaycastRV(from, to, contact_pos, contact_dir, contact_component, NULL, NULL, NULL, false, true) )
-			m_Module.MoveToCursor( contact_pos );
-	}
-	
-	void Click_CopyToClipboard( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
+		vector contactPos;
 
-		switch(m_ExportTypeList.GetSelection())
-		{
-			case COT_ESPMode.COPYLISTRAW:
-				m_Module.CopyToClipboardRaw();
-			break;
-			case COT_ESPMode.COPYLISTSPAWNABLETYPES:
-				m_Module.CopyToClipboardSpawnableTypes();
-			break;
-		#ifdef DZ_Expansion_Market
-			case COT_ESPMode.COPYLISTEXPMARKET:
-				m_Module.CopyToClipboardMarket();
-			break;
-		#endif
-		#ifdef DZ_Expansion_Core
-			case COT_ESPMode.COPYLISTEXPLOADOUT:
-				m_Module.CopyToClipboardExpLoadout(JMSelectedObject);
-			break;
-		#endif
-			case COT_ESPMode.CREATELOADOUT:
-				CreateConfirmation_Two( JMConfirmationType.EDIT, "#STR_COT_ESP_MODULE_LOADOUT_MESSAGE_HEADER", "#STR_COT_ESP_MODULE_LOADOUT_MESSAGE_BODY", "#STR_COT_GENERIC_CANCEL", "", "#STR_COT_GENERIC_CREATE", "CreateLoadout_Confirm" );
-			break;
-		}
+		if ( COT_CameraRaycast( 1000, contactPos ) )
+			m_Module.MoveToCursor( contactPos );
 	}
 
-	void CreateLoadout_Confirm(JMConfirmation confirmation)
+	void CreateLoadout_Confirm( JMConfirmation confirmation )
 	{
 		string name = confirmation.GetEditBoxValue();
-		if (name == string.Empty)
+		if ( name == string.Empty )
 			return;
 
-		if (!m_LoadoutModule)
-			Class.CastTo(m_LoadoutModule, GetModuleManager().GetModule(JMLoadoutModule));
-		
-		m_LoadoutModule.Create(name);
+		if ( !m_LoadoutModule )
+			Class.CastTo( m_LoadoutModule, GetModuleManager().GetModule( JMLoadoutModule ) );
+
+		m_LoadoutModule.Create( name );
+	}
+
+	void PromptSendMessage( string playerGUID, string playerName )
+	{
+		m_PendingMsgPlayerGUID = playerGUID;
+		PromptInput( "#STR_COT_PLAYER_MODULE_MESSAGE_HEADER", "#STR_COT_ESP_MODULE_MESSAGE_PROMPT" + " " + playerName + ":", "OnSendMessage_Confirm" );
+	}
+
+	void OnSendMessage_Confirm( JMConfirmation confirmation )
+	{
+		string msgText = confirmation.GetEditBoxValue();
+		if ( msgText == "" || m_PendingMsgPlayerGUID == "" )
+			return;
+
+		JMPlayerModule playerModule = JMPlayerModule.Cast( GetModuleManager().GetModule( JMPlayerModule ) );
+		if ( playerModule )
+		{
+			playerModule.DoMessage( { m_PendingMsgPlayerGUID }, msgText );
+		}
+		m_PendingMsgPlayerGUID = "";
+	}
+
+	//! DEPRECATED - moved to JMESPViewTypeWidget.IconForViewType().
+	static string IconForViewType( JMESPViewType viewType )
+	{
+		JMDeprecated.WarnOnce( null, "JMESPForm.IconForViewType() is deprecated. It moved to JMESPViewTypeWidget.IconForViewType()." );
+
+		return JMESPViewTypeWidget.IconForViewType( viewType );
 	}
 }

@@ -1,84 +1,111 @@
 class JMNamalskEventManagerForm: JMFormBase
 {
-	private UIActionScroller m_sclr_MainActions;
+	protected UIActionScroller m_sclr_MainActions;
+	protected Widget m_ContentWrapper;
+	protected Widget m_ActionsWrapper;
+	//! protected, not private: sub-mods reach for the module through the form.
+	protected JMNamalskEventManagerModule m_Module;
 
-	private Widget m_ActionsWrapper;
-	private JMNamalskEventManagerModule m_Module;
-	
-	override void OnInit()
+	override void OnCreate()
 	{
 		m_sclr_MainActions = UIActionManager.CreateScroller(layoutRoot.FindAnyWidget("panel"));
-		m_ActionsWrapper = m_sclr_MainActions.GetContentWidget();
-
+		m_ContentWrapper = m_sclr_MainActions.GetContentWidget();
 		m_sclr_MainActions.UpdateScroller();
 	}
-	
+
+	override void OnResize(float w, float h)
+	{
+		if (m_sclr_MainActions)
+			m_sclr_MainActions.UpdateScroller();
+	}
+
 	protected override bool SetModule(JMRenderableModuleBase mdl)
 	{
 		return Class.CastTo(m_Module, mdl);
 	}
-	
-	private void AddSimpleButton(Widget wrapper, string event_name, string button_text, string function, float position = 0.6)
-	{
-		UIActionButton button = UIActionManager.CreateButton(wrapper, button_text, this, function);
-		button.SetData(new JMNamalskEventManagerButtonData(event_name));
-		button.SetWidth(0.2);
-		button.SetPosition(position);
-	}
 
-	private void AddSimpleText(Widget wrapper, string field_text)
-	{
-		UIActionBase field = UIActionManager.CreateText(wrapper, field_text);
-		field.SetWidth(0.4);
-		field.SetPosition(0.6);
-	}
-	
-	private void AddEvent(string event_name)
-	{
-		Widget wrapper = UIActionManager.CreatePanel(m_ActionsWrapper, 0x00000000, 30);
-		UIActionBase name = UIActionManager.CreateText(wrapper, event_name);
-		name.SetWidth(0.8);
-
-		bool canStart = GetPermissionsManager().HasPermission("Namalsk." + event_name + ".Start");
-		bool canCancel = GetPermissionsManager().HasPermission("Namalsk." + event_name + ".Cancel");
-
-		if (canStart)
-			AddSimpleButton(wrapper, event_name, "Start", "StartEvent");
-
-		if (canCancel)
-			AddSimpleButton(wrapper, event_name, "Cancel", "CancelEvent", 0.8);
-
-		if (!canStart && !canCancel)
-			AddSimpleText(wrapper, "No Permission");
-	}
-	
 	override void OnShow()
 	{
-		foreach (string event_name: m_Module.Events)
+		Rebuild();
+	}
+
+	protected void Rebuild()
+	{
+		if (m_ActionsWrapper)
+			m_ActionsWrapper.Unlink();
+
+		m_ActionsWrapper = UIActionManager.CreateGridSpacer(m_ContentWrapper, 1, 1);
+
+		if (!m_Module || !m_Module.Events || m_Module.Events.Count() < 1)
 		{
-			AddEvent(event_name);
+			UIActionManager.CreateText(m_ActionsWrapper, "#STR_COT_NAMALSK_NO_EVENTS_AVAILABLE");
+			m_sclr_MainActions.UpdateScroller();
+			return;
 		}
-		
+
+		foreach (string event_name: m_Module.Events)
+			AddEvent(event_name);
+
 		m_sclr_MainActions.UpdateScroller();
 	}
-	
-	void StartEvent(UIEvent eid, UIActionBase action)
-	{
-		JMNamalskEventManagerButtonData data;
-		if (!Class.CastTo(data, action.GetData())) return;
 
-		ScriptRPC rpc = new ScriptRPC();
-		rpc.Write(data.ClassName);
-		rpc.Send(null, JMNamalskEventManagerRPC.StartEvent, true, null);
+	protected void AddEvent(string event_name)
+	{
+		bool canStart  = JMPermissions.Has(JMConstants.PERM_NAMALSK + "." + event_name + ".Start");
+		bool canCancel = JMPermissions.Has(JMConstants.PERM_NAMALSK + "." + event_name + ".Cancel");
+
+		Widget row = UIActionManager.CreateWrapSpacer(m_ActionsWrapper, WidgetAlignment.WA_LEFT, WidgetAlignment.WA_CENTER);
+
+		UIActionText nameField = UIActionManager.CreateText(row, "", event_name);
+		nameField.SetWidth(0.60);
+		nameField.SetTextVAlign(UIActionVAlign.CENTER);
+
+		if (!canStart && !canCancel)
+		{
+			UIActionText permField = UIActionManager.CreateText(row, "", "#STR_COT_NO_PERMISSION");
+			permField.SetWidth(0.40);
+			permField.SetTextVAlign(UIActionVAlign.CENTER);
+			return;
+		}
+
+		if (canCancel)
+		{
+			UIActionConfirmInline cancelBtn = UIActionManager.CreateDeleteConfirmIcon( row, this, "OnClick_CancelEvent" );
+			cancelBtn.SetData(new JMNamalskEventManagerButtonData(event_name));
+			cancelBtn.SetTooltip("#STR_COT_NAMALSK_CANCEL_THIS_EVENT");
+		}
+
+		if (canStart)
+		{
+			UIActionButton startBtn = UIActionManager.CreateButton(row, "#STR_COT_NAMALSK_START_EVENT", this, "OnClick_StartEvent");
+			startBtn.SetWidth(0.40);
+			startBtn.SetColor(JMTheme.SUCCESS_FILL);
+			startBtn.SetData(new JMNamalskEventManagerButtonData(event_name));
+			startBtn.SetTooltip("#STR_COT_NAMALSK_START_THIS_EVENT");
+		}
 	}
-	
-	void CancelEvent(UIEvent eid, UIActionBase action)
-	{
-		JMNamalskEventManagerButtonData data;
-		if (!Class.CastTo(data, action.GetData())) return;
 
-		ScriptRPC rpc = new ScriptRPC();
-		rpc.Write(data.ClassName);
-		rpc.Send(null, JMNamalskEventManagerRPC.CancelEvent, true, null);
+	void OnClick_StartEvent(UIEvent eid, UIActionBase action)
+	{
+		if (eid != UIEvent.CLICK || !m_Module)
+			return;
+
+		JMNamalskEventManagerButtonData data;
+		if (!Class.CastTo(data, action.GetData()))
+			return;
+
+		m_Module.RequestStartEvent(data.ClassName);
+	}
+
+	void OnClick_CancelEvent(UIEvent eid, UIActionBase action)
+	{
+		if (eid != UIEvent.CHANGE || !m_Module)
+			return;
+
+		JMNamalskEventManagerButtonData data;
+		if (!Class.CastTo(data, action.GetData()))
+			return;
+
+		m_Module.RequestCancelEvent(data.ClassName);
 	}
 }

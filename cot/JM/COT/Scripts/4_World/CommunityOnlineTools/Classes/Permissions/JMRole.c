@@ -1,0 +1,144 @@
+class JMRole : Managed
+{
+	ref JMPermission RootPermission;
+	string Name;
+	ref array< string > SerializedData;
+
+	void JMRole( string name )
+	{
+		Name = name;
+
+		RootPermission = new JMPermission( JMConstants.PERM_ROOT );
+		RootPermission.CopyPermissions(GetPermissionsManager().RootPermission);
+		
+		SerializedData = new array< string >;
+	}
+
+	bool HasPermission( string permission, out JMPermissionType permType )
+	{
+		return RootPermission.HasPermission( permission, permType );
+	}
+
+	void CopyPermissions( JMPermission copy )
+	{
+	#ifdef JM_COT_DIAG_LOGGING
+		auto trace = CF_Trace_0(this, "CopyPermissions");
+	#endif
+
+		RootPermission.CopyPermissions(copy);
+	}
+
+	void ClearPermissions()
+	{
+		RootPermission = new JMPermission( JMConstants.PERM_ROOT );
+	}
+
+	void AddPermission( string permission, JMPermissionType type = JMPermissionType.INHERIT )
+	{
+		#ifdef JM_COT_DIAG_LOGGING
+		auto trace = CF_Trace_2(this, "AddPermission").Add(permission).Add(typename.EnumToString(JMPermissionType, type));
+		#endif
+
+		RootPermission.AddPermission( permission, type );
+	}
+
+	void ChangePermissionTypeRecursive( JMPermissionType from = JMPermissionType.INHERIT, JMPermissionType to = JMPermissionType.INHERIT )
+	{
+		RootPermission.ChangePermissionTypeRecursive( from, to );
+	}
+
+	array< string > Serialize()
+	{
+	#ifdef JM_COT_DIAG_LOGGING
+		auto trace = CF_Trace_2(this, "Serialize").Add(Name).Add(RootPermission.Children.Count());
+	#endif
+
+		SerializedData.Clear();
+
+		RootPermission.Serialize( SerializedData );
+
+		return SerializedData;
+	}
+
+	void Deserialize()
+	{
+	#ifdef JM_COT_DIAG_LOGGING
+		auto trace = CF_Trace_2(this, "Deserialize").Add(Name).Add(SerializedData.Count());
+	#endif
+
+		for ( int i = 0; i < SerializedData.Count(); i++ )
+		{
+			AddPermission( SerializedData[i] );
+		}
+	}
+
+	string FileReadyStripName( string name )
+	{
+		name.Replace( "\\", "" );
+		name.Replace( "/", "" );
+		name.Replace( "=", "" );
+		name.Replace( "+", "" );
+
+		return name;
+	}
+
+	bool Save()
+	{
+	#ifdef JM_COT_DIAG_LOGGING
+		auto trace = CF_Trace_1(this, "Save").Add(Name);
+	#endif
+
+		string filename = FileReadyStripName( Name );
+
+		RootPermission.Sort();
+		Serialize();
+
+		FileHandle file = OpenFile( JMConstants.DIR_ROLES + filename + JMConstants.EXT_ROLE, FileMode.WRITE );
+
+		if ( file != 0 )
+		{
+			string line;
+
+			for ( int i = 0; i < SerializedData.Count(); i++ )
+			{
+				FPrintln( file, SerializedData[i] );
+			}
+
+			CloseFile(file);
+
+			return true;
+		}
+
+		return false;
+	}
+
+	bool Load()
+	{
+	#ifdef JM_COT_DIAG_LOGGING
+		auto trace = CF_Trace_1(this).Add(Name);
+	#endif
+
+		string filename = FileReadyStripName( Name );
+		FileHandle file = OpenFile( JMConstants.DIR_ROLES + filename + JMConstants.EXT_ROLE, FileMode.READ );
+
+		if ( file != 0 )
+		{
+			string line;
+
+			while ( FGets( file, line ) > 0 )
+			{
+				AddPermission( line );
+			}
+
+			CloseFile( file );
+			return true;
+		}
+
+		return false;		
+	}
+
+	void DebugPrint()
+	{
+		RootPermission.DebugPrint( 0 );
+	}
+}

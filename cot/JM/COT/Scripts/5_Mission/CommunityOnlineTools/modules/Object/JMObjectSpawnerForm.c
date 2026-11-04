@@ -1,76 +1,125 @@
 class JMObjectSpawnerForm: JMFormBase
 {
-	private autoptr map< string, string > m_ObjectTypes;
+	//! Category chips for the few most recently used categories; the full set lives behind
+	//! the filter button. Plain buttons in a wrap row, each a FRACTION of the row: the icon grid
+	//! this replaced needed a pixel width kept in step with the chip count and rebuilt itself
+	//! from inside its own click handler.
+	protected ref JMItemCategoryPicker m_Categories;
 
-	private Widget m_TypesActionsWrapper;
-	private Widget m_SpawnerActionsWrapper;
+	//! Categories moved out of a dropdown of their own and behind a filter
+	//! button beside the search box. The dropdown cost a full row of the left
+	//! column permanently for a control that is touched once per search.
+	protected UIActionImageButton m_FilterButton;
 
-	private UIActionSlider m_QuantityItem;
-	private UIActionSlider m_TemperatureItem;
-	private UIActionSlider m_HealthItem;
-	private UIActionDropdownList m_ItemDataList;
-	
-	private UIActionEditableTextPreview m_SearchBox;
-	private UIActionSelectBox m_SpawnMode;
+	//! Class name for every row currently in the list. The visible text is NOT the class
+	//! name once display names are on, so spawning and every clipboard export resolve a row
+	//! index through this.
+	protected ref TStringArray m_ListClasses;
+	protected Widget m_SearchWrapper;
+	protected Widget m_FilterWrapper;
+	protected Widget m_RecentWrapper;
+	protected Widget m_ListWrapper;
+	protected UIActionScroller m_RightScroller;
 
-	private UIActionSelectBox m_ObjSetupMode;
+	//! The right column's two bands: the scroller (preview, properties,
+	//! export) and, pinned under it, the spawn footer - so Spawn is always on
+	//! screen, however long the property card for the selected class is.
+	protected Widget m_RightBody;
+	protected Widget m_RightFooter;
 
-	private TextListboxWidget m_ClassList;
+	//! The property card - per-class rows and the values the admin picked.
+	protected ref JMObjectSpawnerProperties m_Props;
+	protected UIActionSearchBox m_SearchBox;
 
-	private ItemPreviewWidget m_ItemPreview;
-	private EntityAI m_PreviewItem;
-	private vector m_Orientation;
-	private float m_Distance;
+	//! Cycle selectors, not checkboxes: both of these choose between two named
+	//! states rather than switching one on, and a checkbox labelled "display
+	//! name" never says what the other state is.
+	protected UIActionSelectBox m_NameModeSelect;
+	protected UIActionSelectBox m_UnsafeSelect;
+	protected UIActionDropdown m_SpawnMode;
+	protected UIActionDropdown m_ObjSetupMode;
 
-	private int m_MouseX;
-	private int m_MouseY;
+	//! Copying a list is not spawning anything, so it is no longer buried among
+	//! the spawn destinations. Its own card, its own dropdown, its own button.
+	protected UIActionDropdown m_ExportMode;
 
-	private JMObjectSpawnerModule m_Module;
+	//! COT_ObjectSpawnerMode for each entry of the two dropdowns, in the order
+	//! they list them. The old single dropdown relied on its index BEING the
+	//! enum value; split in two, neither can.
+	protected ref TIntArray m_SpawnModeIds;
+	protected ref TIntArray m_ExportModeIds;
+	protected UIActionItemList m_ClassList;
+	protected ItemPreviewWidget m_ItemPreview;
 
-	private Object m_DeletingObject;
+	//! Row context menu (right-click a class list row) - shares the same
+	//! Filter/Object/Categories actions the row's own buttons offer.
+	protected ref JMObjectSpawnerRowMenu m_RowMenu;
 
-	private UIActionButton m_SpawnButton;
-	private UIActionButton m_AttachmentsButton;
-	private static int s_ObjSpawnMode = COT_ObjectSpawnerMode.CURSOR;
-	private ref array< string > m_ObjSpawnModeText =
-	{
-		"#STR_COT_OBJECT_MODULE_EXPORT_RAW",
-		"#STR_COT_OBJECT_MODULE_EXPORT_TYPES",
-	#ifdef DZ_Expansion_Market
-		"#STR_COT_OBJECT_MODULE_EXPORT_MARKET",
-	#endif
+	//! The preview's wrapper panel. The preview hangs inside a plainly-styled panel (as
+	//! vanilla's do) so it never inherits the engine's default style for a styleless widget,
+	//! which COT's style table changes. Geometry is applied to the WRAPPER; the preview
+	//! fills it fractionally.
+	protected Widget m_ItemPreviewPanel;
+	protected EntityAI m_PreviewItem;
 
-		"#STR_COT_OBJECT_MODULE_CROSSHAIR",
-		"#STR_COT_OBJECT_MODULE_SELF",
-		"#STR_COT_OBJECT_MODULE_TARGET"
-	};
+	//! Setup mode the current preview entity was built with. The attachments a
+	//! spawn produces depend on it, so a mode change has to rebuild the preview
+	//! exactly like a class change does - an entity that already has its debug
+	//! attachments cannot be walked back to a bare one.
+	protected int m_PreviewSetupMode;
+	protected vector m_Orientation;
+	protected float m_Distance;
+	protected int m_MouseX;
+	protected int m_MouseY;
 
-	private ref array< string > m_ObjItemStateFoodText = {};
+	//! protected, not private: sub-mods reach for the module through the form.
+	protected JMObjectSpawnerModule m_Module;
+	protected UIActionButton m_SpawnButton;
+	protected UIActionConfirmInline m_DeleteCursorBtn;
 
-	private ref array< string > m_ObjItemStateBloodText =
-	{
-		// Blood bags
-		"UNKNOWN",
-		"0+",
-		"0-",
-		"A+",
-		"A-",
-		"B+",
-		"B-",
-		"AB+",
-		"AB-"
-	};
+	//! Object targeted by the quick-delete keybind while m_DeleteCursorBtn is
+	//! armed. A second keybind press on the same target confirms; aiming at
+	//! something else re-arms on the new target instead of deleting the old one.
+	protected Object m_PendingDeleteCursorObj;
+	protected static int s_ObjSpawnMode   = COT_ObjectSpawnerMode.CURSOR;
+	protected static int s_ObjExportMode  = COT_ObjectSpawnerMode.COPYLISTRAW;
 
-	private ref array< int > m_ObjItemStateLiquid = {};
-	private ref array< string > m_ObjItemStateLiquidText = {};
-	private ref map<int, int> m_ObjItemStateLiquidColors = new map<int, int>;
+	//! How many recent categories are kept. Small on purpose - this is a
+	//! shortcut back to what was just used, not a second category list.
 
-	private int m_ItemStateType = -1;
-	private int m_LiquidType;
+	//! Height of the preview inside its card.
+	static const int PREVIEW_H = 240;
+
+	//! The left column's bands, top to bottom, in layout pixels. All are pinned from
+	//! OnResize rather than the layout file: two sources for the same four numbers made the
+	//! chip strip overlap the class list (the file said one thing, the pin another).
+	static const int SEARCH_H = 34;
+	static const int FILTER_H = 36;
+	static const int RECENT_H = 36;
+
+	//! Height of the right column's spawn footer: a divider and two rows -
+	//! destination + setup, then Spawn + Delete.
+	static const int FOOTER_H = 80;
+
+	//! Row splits, as FRACTIONS of the row; never a measured flex pass nor a fraction mixed
+	//! with fixed pixels (see OnCreate). A fixed-pixel button beside a fractional field wraps
+	//! once the row is narrower than both (window drags down to RESIZE_MIN_WIDTH); two
+	//! fractions summing under 1 cannot.
+	static const float MODE_ROW_W   = 0.5;
+	static const float MODE_ROW_W2  = 0.49;
+	static const float SEARCH_ROW_W = 0.86;
+	static const float FILTER_BTN_W = 0.13;
 
 	void JMObjectSpawnerForm()
 	{
-		m_ObjectTypes = new map< string, string >;
+		m_PreviewSetupMode = -1;
+
+		m_ListClasses    = new TStringArray;
+		m_SpawnModeIds   = new TIntArray;
+		m_ExportModeIds  = new TIntArray;
+
+		m_Props   = new JMObjectSpawnerProperties( this );
+		m_RowMenu = new JMObjectSpawnerRowMenu( this );
 	}
 
 	void ~JMObjectSpawnerForm()
@@ -79,222 +128,298 @@ class JMObjectSpawnerForm: JMFormBase
 			g_Game.ObjectDelete(m_PreviewItem);
 	}
 
+	string GetCurrentSelection()
+	{
+		int row = m_ClassList.GetSelectedIndex();
+
+		if ( row < 0 || row >= m_ListClasses.Count() )
+			return "";
+
+		return m_ListClasses[row];
+	}
+
+	//! Sum of the three above. A function rather than a constant because a static const folded
+	//! from other static consts evaluates to 0 in Enforce - and writing the total out by hand
+	//! left it free to drift from the bands it adds up. Returned in screen pixels.
+	static float GetLeftHeaderHeight()
+	{
+		return JMUILayout.Px( SEARCH_H + FILTER_H + RECENT_H );
+	}
+
+	//! The module this form drives. Public for the property card.
+	JMObjectSpawnerModule GetModule()
+	{
+		return m_Module;
+	}
+
+	//! The entity the preview is showing, for the property card to push values onto.
+	EntityAI GetPreviewItem()
+	{
+		return m_PreviewItem;
+	}
+
+	UIActionScroller GetRightScroller()
+	{
+		return m_RightScroller;
+	}
+
 	protected override bool SetModule( JMRenderableModuleBase mdl )
 	{
 		return Class.CastTo( m_Module, mdl );
 	}
 
-	override void OnInit()
+	override void OnResize( float w, float h )
 	{
-		m_ClassList = TextListboxWidget.Cast( layoutRoot.FindAnyWidget( "object_spawn_list" ) );
+		super.OnResize( w, h );
 
-		m_TypesActionsWrapper = layoutRoot.FindAnyWidget( "object_types_actions_wrapper" );
+		//! The ONE computed thing: how far down the left column the class list reaches (the other
+		//! bands are fixed; the right scroller sizes itself, but its footer split uses the same h).
+		//! h is real content-height pixels from JMWindowBase, not a widget's GetScreenSize (zero
+		//! before first render). All four bands are pinned here so the layout file cannot disagree.
+		float searchH = JMUILayout.Px( SEARCH_H );
+		float filterH = JMUILayout.Px( FILTER_H );
+		float headerH = GetLeftHeaderHeight();
 
-		m_ItemPreview = ItemPreviewWidget.Cast( layoutRoot.FindAnyWidget( "object_preview" ) );
+		PinBand( m_SearchWrapper, 0, searchH );
+		PinBand( m_FilterWrapper, searchH, filterH );
+		PinBand( m_RecentWrapper, searchH + filterH, JMUILayout.Px( RECENT_H ) );
 
-		Widget typesButtons = UIActionManager.CreateGridSpacer( m_TypesActionsWrapper, 8, 1 );
-		AddObjectType( typesButtons, "#STR_COT_OBJECT_MODULE_FILTER_TYPE_ALL", "" );
-		AddObjectType( typesButtons, "#STR_COT_OBJECT_MODULE_FILTER_TYPE_Food", "edible_base" );
-		AddObjectType( typesButtons, "#STR_COT_OBJECT_MODULE_FILTER_TYPE_Vehicles", "transport" );
-		AddObjectType( typesButtons, "#STR_COT_OBJECT_MODULE_FILTER_TYPE_Firearms", "weapon_base" );
-		AddObjectType( typesButtons, "#STR_COT_OBJECT_MODULE_FILTER_TYPE_Ammo_Magazines", "magazine_base" );
-		AddObjectType( typesButtons, "#STR_COT_OBJECT_MODULE_FILTER_TYPE_Clothing", "clothing_base" );
-		AddObjectType( typesButtons, "#STR_COT_OBJECT_MODULE_FILTER_TYPE_Containers", "container_base" );
-		AddObjectType( typesButtons, "#STR_COT_OBJECT_MODULE_FILTER_TYPE_Items", "inventory_base" );
-		AddObjectType( typesButtons, "#STR_COT_OBJECT_MODULE_FILTER_TYPE_Buildings", "house" );
-		AddObjectType( typesButtons, "#STR_COT_OBJECT_MODULE_FILTER_TYPE_AI", "dz_lightai" );
-
-		Widget spawnactionswrapper = layoutRoot.FindAnyWidget( "object_spawn_actions_wrapper" );
-
-		m_SpawnerActionsWrapper = UIActionManager.CreateGridSpacer( spawnactionswrapper, 4, 1 );
-
-		Widget actions = UIActionManager.CreatePanel( m_SpawnerActionsWrapper, 0x00000000, 35 );
-
-		Widget searchSpacer = UIActionManager.CreateWrapSpacerCompact( actions, WidgetAlignment.WA_LEFT, WidgetAlignment.WA_CENTER );
-
-		m_SearchBox = UIActionManager.CreateEditableTextPreview( searchSpacer, "#STR_COT_OBJECT_MODULE_SEARCH", this, "SearchInput_OnChange" );
-		m_SearchBox.SetWidth( 0.65 );
-
-		UIActionImageButton button = UIActionManager.CreateImageButton( searchSpacer, "set:dayz_gui image:icon_x", this, "SearchInput_OnClickReset" );
-		button.SetFixedSize( 28, 28 );
-
-		int foodStageCount = FoodStageType.COUNT;
-		for (int foodStage = 0; foodStage < FoodStageType.COUNT; foodStage++)
+		if ( m_ListWrapper && h > headerH )
 		{
-			m_ObjItemStateFoodText.Insert(typename.EnumToString(FoodStageType, foodStage));
+			float listH = h - headerH;
+
+			PinBand( m_ListWrapper, headerH, listH );
+
+			//! The list is told the height rather than measuring it. Same
+			//! number, one source - and a widget cannot measure itself on the
+			//! frame it is built.
+			if ( m_ClassList )
+				m_ClassList.SetViewportHeight( listH );
 		}
 
-		m_ObjItemStateLiquidColors[0] = COLOR_WHITE;
-
-		string displayName;
-		string translated;
-		int color;
-		foreach (int liquidType, LiquidInfo liquidInfo: Liquid.m_LiquidInfosByType)
+		//! The right column: the scroller takes everything above the footer.
+		float footerH = JMUILayout.Px( FOOTER_H );
+		if ( h > footerH )
 		{
-			NutritionalProfile nutritionProfile = liquidInfo.m_NutriProfile;
-
-			string liquidClsName = nutritionProfile.GetLiquidClassname();
-			string underscored = JMStatics.CamelCaseToWords(liquidClsName, "_");
-
-			//! Liquids (except blood)
-			if (nutritionProfile.IsLiquid() && liquidType > 255)
-			{
-				//!@note most of this joinked from ExpansionWorld::GetLiquidDisplayName
-
-				g_Game.ConfigGetTextRaw("CfgLiquidDefinitions " + liquidClsName +  " displayName", displayName);
-				g_Game.FormatRawConfigStringKeys(displayName);
-
-				if (displayName.IndexOf("#") == 0)
-					translated = Widget.TranslateString(displayName);
-				else
-					translated = displayName;
-
-				//! Fix up vanilla liquid display name
-				if (displayName.IndexOf("#STR_cfgLiquidDefinitions_") == 0 && translated.IndexOf("$UNT$") == 0)
-					translated = liquidClsName;
-
-				int idx = 0;
-				foreach (string liquidText: m_ObjItemStateLiquidText)
-				{
-					if (JMStatics.StrCaseCmp(translated, liquidText) < 0)
-						break;
-					idx++;
-				}
-
-				m_ObjItemStateLiquid.InsertAt(liquidType, idx);
-				m_ObjItemStateLiquidText.InsertAt(translated, idx);
-			}
-
-			//! Liquids (including blood)
-			if (nutritionProfile.IsLiquid())
-			{
-				string colorPath = "CfgLiquidDefinitions " + liquidClsName +  " color";
-
-				color = g_Game.ConfigGetInt(colorPath);
-
-				if (!color)
-				{
-					string colorConstantName;
-					g_Game.ConfigGetTextRaw(colorPath, colorConstantName);
-
-					if (!colorConstantName)
-					{
-						//! Fallback to liquid classname, all uppercase
-						colorConstantName = liquidClsName;
-						colorConstantName.ToUpper();
-					}
-
-					bool found = JMStatics.StringToEnumEx(Colors, colorConstantName, color);
-
-					if (!found)
-					{
-						if (!colorConstantName.Contains("LIQUID"))
-						{
-							colorConstantName += "LIQUID";  //! e.g. RaG_Liquid_Framework
-							found = JMStatics.StringToEnumEx(Colors, colorConstantName, color);
-						}
-
-						if (!found)
-						{
-							//! Fallback to liquid classname, all uppercase, words delimited by underscore
-							colorConstantName = underscored;
-							colorConstantName.ToUpper();
-
-							if (!JMStatics.StringToEnumEx(Colors, colorConstantName, color))
-							{
-								switch (liquidType)
-								{
-									case LIQUID_BEER:
-										color = Colors.ORANGE;
-										break;
-									case LIQUID_DIESEL:
-									case LIQUID_GASOLINE:
-										color = Colors.YELLOW;
-										break;
-									case LIQUID_DISINFECTANT:
-									case LIQUID_VODKA:
-										color = Colors.GRAY;
-										break;
-									default:
-										if (liquidType > 255)
-											color = Colors.COLOR_LIQUID;
-										else
-											//! Blood
-											color = Colors.RED;
-										break;
-								}
-							}
-						}
-					}
-				}
-
-				m_ObjItemStateLiquidColors[liquidType] = color;
-			}
+			PinBand( m_RightBody, 0, h - footerH );
+			PinBand( m_RightFooter, h - footerH, footerH );
 		}
-		
-	#ifdef DIAG
-		for (int k = 0; k < m_ObjItemStateLiquidText.Count(); k++)
-		{
-			TIntArray argb = {};
 
-			for (int i = 0; i < 4; i++)
-			{
-				argb.Insert((m_ObjItemStateLiquidColors[m_ObjItemStateLiquid[k]] >> (24 - i * 8)) & 255);
-			}
+		if ( m_RightScroller )
+			m_RightScroller.UpdateScroller();
+	}
 
-			m_ObjItemStateLiquidColors[m_ObjItemStateLiquid[k]];
-			PrintFormat("LIQUID %1 displayName='%2' type=%3 className='%4' color={%5, %6, %7, %8}", k, m_ObjItemStateLiquidText[k], m_ObjItemStateLiquid[k], Liquid.GetNutritionalProfileByType(m_ObjItemStateLiquid[k]).GetLiquidClassname(), argb[0], argb[1], argb[2], argb[3]);
-		}
+	//! Place one band of the left column: exact y, exact height, full width.
+	protected void PinBand( Widget band, float y, float height )
+	{
+		if ( !band )
+			return;
+
+		band.SetFlags( WidgetFlags.VEXACTPOS | WidgetFlags.VEXACTSIZE, true );
+		band.SetPos( 0, y );
+		band.SetSize( 1, height );
+	}
+
+	override void OnShow()
+	{
+		super.OnShow();
+
+		if ( m_ItemPreview )
+			m_ItemPreview.Show( true );
+
+		//! The deferred re-layout this used to schedule a tick after OnShow is
+		//! gone with the flex row it existed for. Nothing in the form now needs
+		//! to have been rendered once before it can lay itself out.
+		if ( m_RightScroller )
+			m_RightScroller.UpdateScroller();
+	}
+
+	override void OnHide()
+	{
+		super.OnHide();
+		if ( m_ItemPreview )
+			m_ItemPreview.Show( false );
+	}
+
+	override void OnCreate()
+	{
+		// Two columns, modelled on player_form.layout: panel_left (search, filters, recent chips,
+		// class list) and panel_right (preview, properties, spawn as cards in a scroller).
+		// Only ONE thing is computed: how far the class list reaches down the left column;
+		// everything else is a fraction or sized by its own content.
+
+		m_LeftPanel         = layoutRoot.FindAnyWidget( "panel_left" );
+		m_RightPanel        = layoutRoot.FindAnyWidget( "panel_right" );
+		m_RightPanelDisable = layoutRoot.FindAnyWidget( "panel_right_disable" );
+
+		m_SearchWrapper = layoutRoot.FindAnyWidget( "spawner_search_wrapper" );
+		m_FilterWrapper = layoutRoot.FindAnyWidget( "spawner_filter_wrapper" );
+		m_RecentWrapper = layoutRoot.FindAnyWidget( "spawner_recent_wrapper" );
+		m_ListWrapper   = layoutRoot.FindAnyWidget( "spawner_list_wrapper" );
+
+		// --- Search -----------------------------------------------------------
+		JMSearchRow toolbar = UIActionManager.CreateSearchRow( m_SearchWrapper, "#STR_COT_OBJECT_MODULE_SEARCH", this, "SearchInput_OnChange", "OnClick_CategoryFilter", "#STR_COT_OBJECT_MODULE_CATEGORY_DESC", "", SEARCH_ROW_W, FILTER_BTN_W );
+		m_SearchBox = toolbar.Search;
+		m_FilterButton = toolbar.Filter;
+
+		// --- Filters ----------------------------------------------------------
+		Widget filterRow = UIActionManager.CreateWrapSpacerCompact( m_FilterWrapper, WidgetAlignment.WA_LEFT, WidgetAlignment.WA_CENTER );
+
+		//! Entry text is printed verbatim by the selector, so the keys are
+		//! resolved here rather than being handed over as keys.
+		array<string> nameModes = new array<string>;
+		nameModes.Insert( "#STR_COT_OBJECT_MODULE_NAMEMODE_CLASS" );
+		nameModes.Insert( "#STR_COT_OBJECT_MODULE_NAMEMODE_DISPLAY" );
+
+		m_NameModeSelect = UIActionManager.CreateSelectionBox( filterRow, "", nameModes, this, "Click_OnFilterDisplayName" );
+		m_NameModeSelect.SetWidth( MODE_ROW_W );
+		m_NameModeSelect.SetSelectorWidth( 1.0 );
+		m_NameModeSelect.SetTooltip( "#STR_COT_OBJECT_MODULE_SPAWN_DISPLAYNAME_DESC" );
+
+		if ( m_Module.m_FilterWithDisplayName )
+			m_NameModeSelect.SetSelection( 1, false );
+
+		array<string> unsafeModes = new array<string>;
+		unsafeModes.Insert( "#STR_COT_OBJECT_MODULE_UNSAFE_HIDE" );
+		unsafeModes.Insert( "#STR_COT_OBJECT_MODULE_UNSAFE_SHOW" );
+
+		m_UnsafeSelect = UIActionManager.CreateSelectionBox( filterRow, "", unsafeModes, this, "Click_OnSafetyToogle" );
+		m_UnsafeSelect.SetWidth( MODE_ROW_W2 );
+		m_UnsafeSelect.SetSelectorWidth( 1.0 );
+		m_UnsafeSelect.SetTooltip( "#STR_COT_OBJECT_MODULE_SHOWUNSAFE_DESC" );
+
+		if ( m_Module.m_AllowRestrictedClassNames )
+			m_UnsafeSelect.SetSelection( 1, false );
+
+		// --- Class list ---
+		//! COT's own list, not TextListboxWidget: that draws in the engine's debug style and builds
+		//! one entry per item (~14000 widgets per keystroke here). This keeps a pool of the rows
+		//! that fit and moves the data through it.
+		m_ClassList = UIActionManager.CreateItemList( m_ListWrapper, this, "OnClick_ClassList" );
+		m_ClassList.SetEmptyText( "#STR_COT_OBJECT_MODULE_NO_RESULTS" );
+
+		// --- Right column -----------------------------------------------------
+		m_RightBody   = layoutRoot.FindAnyWidget( "spawner_right_body" );
+		m_RightFooter = layoutRoot.FindAnyWidget( "spawner_right_footer" );
+
+		m_RightScroller = UIActionManager.CreateScroller( m_RightBody );
+		Widget rightContent = m_RightScroller.GetContentWidget();
+
+		UIActionCard previewCard = UIActionManager.CreateCard( rightContent, "#STR_COT_OBJECT_MODULE_PREVIEW" );
+
+		//! A fixed-height panel to hang the preview in. The preview layout is
+		//! fractional, and a fractional height inside a size-to-content card
+		//! resolves against the whole column.
+		Widget previewHost = UIActionManager.CreateRow( previewCard.GetContent(), PREVIEW_H );
+
+		m_ItemPreviewPanel = g_Game.GetWorkspace().CreateWidgets( "JM/COT/GUI/layouts/objectspawner_preview.layout", previewHost );
+
+		if ( m_ItemPreviewPanel )
+			Class.CastTo( m_ItemPreview, m_ItemPreviewPanel.FindAnyWidget( "object_preview" ) );
+
+		//! ItemPreviewWidget is an RTT surface that only renders inside the narrow sort band the
+		//! Preview Lab found (2026-09-24; see JMUILayout.SORT_PREVIEW). It does NOT need a
+		//! UIScriptedMenu: that was a red herring from only trying sort 0 or 32000. A plain
+		//! window child at the right sort works.
+		if ( m_ItemPreview )
+			m_ItemPreview.SetSort( JMUILayout.SORT_PREVIEW );
+
+		m_Props.Build( rightContent );
+
+		// --- Spawn ------------------------------------------------------------
+		array<string> spawnModes = new array<string>;
+		m_SpawnModeIds.Clear();
+
+		AddMode( m_SpawnModeIds, spawnModes, COT_ObjectSpawnerMode.CURSOR,           "#STR_COT_OBJECT_MODULE_CROSSHAIR" );
+		AddMode( m_SpawnModeIds, spawnModes, COT_ObjectSpawnerMode.PLAYER_POSITION,  "#STR_COT_OBJECT_MODULE_SELF" );
+		AddMode( m_SpawnModeIds, spawnModes, COT_ObjectSpawnerMode.TARGET_INVENTORY, "#STR_COT_OBJECT_MODULE_TARGET" );
+
+		if ( !g_Game.IsMultiplayer() )
+			AddMode( m_SpawnModeIds, spawnModes, COT_ObjectSpawnerMode.PLAYER_INVENTORY, "#STR_COT_OBJECT_MODULE_INVENTORY" );
+		else
+			AddMode( m_SpawnModeIds, spawnModes, COT_ObjectSpawnerMode.PLAYER_INVENTORY, "#STR_COT_OBJECT_MODULE_SELECTED_PLAYERS" );
+
+		AddMode( m_SpawnModeIds, spawnModes, COT_ObjectSpawnerMode.OBJECT_INVENTORY, "#STR_COT_OBJECT_MODULE_SELECTED_OBJECTS" );
+
+		//! Not a card in the scroller any more: a footer pinned under it, so
+		//! the Spawn button never scrolls away behind a long property card.
+		//! A divider stands in for the card's frame.
+		Widget spawnFooter = UIActionManager.CreateGridSpacer( m_RightFooter, 2, 1 );
+		UIActionManager.CreateDivider( spawnFooter, JMTheme.DIVIDER_MEDIUM, 1 );
+		Widget spawnBody = UIActionManager.CreateGridSpacer( spawnFooter, 2, 1 );
+
+		//! Every width in this card is a FRACTION of its row, never a measured flex split:
+		//! UIActionFlexRow cannot measure a row that has not been drawn, which is every row on the
+		//! frame it is built. A fraction is right on the first frame, with no CallLater workaround.
+		Widget modeRow = UIActionManager.CreateWrapSpacerCompact( spawnBody, WidgetAlignment.WA_LEFT, WidgetAlignment.WA_CENTER );
+
+		m_SpawnMode = UIActionManager.CreateDropdown( modeRow, "", layoutRoot, this, "ChangeSpawnMode", spawnModes );
+		m_SpawnMode.SetWidth( MODE_ROW_W );
+		m_SpawnMode.SetSelection( IndexOfMode( m_SpawnModeIds, s_ObjSpawnMode ), false );
+		m_SpawnMode.SetTooltip( "#STR_COT_OBJECT_MODULE_MODE_DESC" );
+		AddOverlay( m_SpawnMode );
+
+		array<string> setupOptions = new array<string>;
+		setupOptions.Insert( "#STR_COT_OBJECT_MODULE_SPAWN_WITH_DEBUG" );
+		setupOptions.Insert( "#STR_COT_OBJECT_MODULE_SPAWN_WITH_CE" );
+		setupOptions.Insert( "#STR_COT_GENERIC_NONE" );
+		m_ObjSetupMode = UIActionManager.CreateDropdown( modeRow, "", layoutRoot, this, "Click_ObjSetupMode", setupOptions );
+		m_ObjSetupMode.SetWidth( MODE_ROW_W2 );
+		m_ObjSetupMode.SetSelection( m_Module.m_ObjSetupMode, false );
+		m_ObjSetupMode.SetTooltip( "#STR_COT_OBJECT_MODULE_SETUP_DESC" );
+		AddOverlay( m_ObjSetupMode );
+
+		//! Spawn and delete share a row and a width. Both layouts are 30 tall,
+		//! and neither carries a pixel width, so the pair scales together and
+		//! the row cannot wrap however narrow the window gets.
+		Widget spawnRow = UIActionManager.CreateWrapSpacerCompact( spawnBody, WidgetAlignment.WA_LEFT, WidgetAlignment.WA_CENTER );
+
+		m_SpawnButton = UIActionManager.CreateButton( spawnRow, "#STR_COT_OBJECT_MODULE_SPAWN_ON", this, "" );
+		if ( m_SpawnButton ) m_SpawnButton.SetOnClick( this, "Click_SpawnObject" );
+		m_SpawnButton.SetWidth( MODE_ROW_W );
+		m_SpawnButton.SetColor( JMTheme.SUCCESS_FILL );
+		m_SpawnButton.SetTooltip( "#STR_COT_OBJECT_MODULE_SPAWN_DESC" );
+
+		m_DeleteCursorBtn = UIActionManager.CreateConfirmInline( spawnRow, "#STR_COT_OBJECT_MODULE_DELETE_CURSOR", this, "DeleteCursor" );
+		UIActionIconGrid.ApplyDeletePreset( m_DeleteCursorBtn );
+		m_DeleteCursorBtn.SetWidth( MODE_ROW_W2 );
+		m_DeleteCursorBtn.SetTooltip( "#STR_COT_OBJECT_MODULE_DELETE_DESC" );
+		m_DeleteCursorBtn.SetForm( this );
+
+		BindPermission( m_DeleteCursorBtn, JMConstants.PERM_ENTITY_DELETE );
+
+		// --- Export ---
+		//! Its own card under Spawn: copying a class list is not spawning, and in the spawn dropdown
+		//! the Spawn button had to rename itself and disable Setup to stay truthful.
+		array<string> exportModes = new array<string>;
+		m_ExportModeIds.Clear();
+
+		AddMode( m_ExportModeIds, exportModes, COT_ObjectSpawnerMode.COPYLISTRAW,   "#STR_COT_OBJECT_MODULE_EXPORT_RAW" );
+		AddMode( m_ExportModeIds, exportModes, COT_ObjectSpawnerMode.COPYLISTTYPES, "#STR_COT_OBJECT_MODULE_EXPORT_TYPES" );
+
+	#ifdef DZ_Expansion_Market
+		AddMode( m_ExportModeIds, exportModes, COT_ObjectSpawnerMode.COPYLISTEXPMARKET, "#STR_COT_OBJECT_MODULE_EXPORT_MARKET" );
 	#endif
 
-		m_ItemDataList = UIActionManager.CreateDropdownBox( actions, spawnactionswrapper, "State:", {""}, this, "Click_ItemData" );
-		m_ItemDataList.SetPosition( 0.70 );
-		m_ItemDataList.SetWidth( 0.3 );
-		m_ItemDataList.Disable();
+		UIActionCard exportCard = UIActionManager.CreateCard( rightContent, "#STR_COT_OBJECT_MODULE_EXPORT" );
+		Widget exportRow = UIActionManager.CreateWrapSpacerCompact( exportCard.GetContent(), WidgetAlignment.WA_LEFT, WidgetAlignment.WA_CENTER );
 
-		Widget itemData = UIActionManager.CreateGridSpacer( m_SpawnerActionsWrapper, 2, 2 );
+		m_ExportMode = UIActionManager.CreateDropdown( exportRow, "", layoutRoot, this, "ChangeExportMode", exportModes );
+		m_ExportMode.SetWidth( MODE_ROW_W );
+		m_ExportMode.SetSelection( IndexOfMode( m_ExportModeIds, s_ObjExportMode ), false );
+		m_ExportMode.SetTooltip( "#STR_COT_OBJECT_MODULE_EXPORT_DESC" );
+		AddOverlay( m_ExportMode );
 
-		m_QuantityItem = UIActionManager.CreateSlider( itemData, "#STR_COT_OBJECT_MODULE_QUANTITY", 0, 100);
-		m_QuantityItem.SetCurrent( 100 );
+		UIActionButton copyBtn = UIActionManager.CreateButton( exportRow, "#STR_COT_GENERIC_COPY", this, "" );
+		if ( copyBtn ) copyBtn.SetOnClick( this, "Click_CopyList" );
+		copyBtn.SetWidth( MODE_ROW_W2 );
+		copyBtn.SetTooltip( "#STR_COT_OBJECT_MODULE_EXPORT_COPY_DESC" );
 
-		m_HealthItem = UIActionManager.CreateSlider( itemData, "#STR_COT_OBJECT_MODULE_HEALTH", 0, 100, this, "Click_SetHealth");
-		m_HealthItem.SetStepValue( 1 );
-		m_HealthItem.SetCurrent( 100 );
+		// The Spawn button names the destination the dropdown is set to.
+		SyncSpawnButtonLabel();
 
-		m_TemperatureItem = UIActionManager.CreateSlider( itemData, "#STR_COT_OBJECT_MODULE_TEMPERATURE", GameConstants.STATE_COLD_LVL_FOUR, GameConstants.STATE_HOT_LVL_FOUR, this, "Click_SetTemperature");
-		m_TemperatureItem.SetSliderWidth(0.6);
-		m_TemperatureItem.SetStepValue( 1 );
-		m_TemperatureItem.SetFormat( "#STR_COT_FORMAT_DEGREE" );
-		m_TemperatureItem.SetCurrent( GameConstants.STATE_NEUTRAL_TEMP );
-
-		UIActionManager.CreateCheckbox( itemData, "#STR_COT_OBJECT_MODULE_SPAWN_DISPLAYNAME", this, "Click_OnFilterDisplayName", m_Module.m_FilterWithDisplayName );
-
-		Widget spawnButtons = UIActionManager.CreateGridSpacer( m_SpawnerActionsWrapper, 1, 3 );
-
-		m_SpawnButton = UIActionManager.CreateButton( spawnButtons, "#STR_COT_OBJECT_MODULE_SPAWN_ON", this, "Click_SpawnObject" );
-		
-		if ( !g_Game.IsMultiplayer() )
-			m_ObjSpawnModeText.Insert("#STR_COT_OBJECT_MODULE_INVENTORY");
-		else
-			m_ObjSpawnModeText.Insert("#STR_COT_OBJECT_MODULE_SELECTED_PLAYERS");
-
-		m_ObjSpawnModeText.Insert("#STR_COT_OBJECT_MODULE_SELECTED_OBJECTS");
-
-		m_SpawnMode = UIActionManager.CreateSelectionBox( spawnButtons, "", m_ObjSpawnModeText, this, "ChangeSpawnMode" );
-		m_SpawnMode.SetSelectorWidth(1.0);
-		m_SpawnMode.SetSelection(s_ObjSpawnMode, false);
-
-		UIActionButton delbtn = UIActionManager.CreateButton( spawnButtons, "#STR_COT_OBJECT_MODULE_DELETE", this, "DeleteCursor" );
-		delbtn.SetColor(COLOR_RED);
-
-		Widget spawnOptions = UIActionManager.CreateGridSpacer( m_SpawnerActionsWrapper, 1, 3 );
-
-		m_AttachmentsButton = UIActionManager.CreateButton(spawnOptions, "#STR_COT_OBJECT_MODULE_SPAWN_WITH", this, "Click_SpawnObject");
-		m_ObjSetupMode =  UIActionManager.CreateSelectionBox( spawnOptions, "", {"#STR_COT_OBJECT_MODULE_SPAWN_WITH_DEBUG", "#STR_COT_OBJECT_MODULE_SPAWN_WITH_CE", "#STR_COT_GENERIC_NONE"}, this, "Click_ObjSetupMode" );
-		m_ObjSetupMode.SetSelectorWidth(1.0);
-		m_ObjSetupMode.SetSelection(m_Module.m_ObjSetupMode, false);
-
-		UIActionManager.CreateCheckbox( spawnOptions, "#STR_COT_OBJECT_MODULE_SHOWUNSAFE", this, "Click_OnSafetyToogle", m_Module.m_AllowRestrictedClassNames );
+		m_Categories = new JMItemCategoryPicker( this, m_RecentWrapper, JMFilterRegistry.OBJECTS, this, "OnCategoryChanged", m_Module.m_CurrentType );
+		m_Categories.RebuildRecent();
 
 		m_SearchBox.SetText(m_Module.m_SearchText);
 		UpdateList();
@@ -302,207 +427,85 @@ class JMObjectSpawnerForm: JMFormBase
 		UpdateItemPreview();
 	}
 
-	void Click_ItemData( UIEvent eid, UIActionBase action )
+	// -------------------------------------------------------------------------
+	//  Categories - the filter button, its menu and the recent chips are a
+	//  JMItemCategoryPicker, shared with Loot Analysis.
+	// -------------------------------------------------------------------------
+
+	void OnClick_CategoryFilter( UIEvent eid, UIActionBase action )
 	{
-		if ( eid != UIEvent.CHANGE )
-			return;
-		
-		if (m_ItemStateType == 0)
-			m_LiquidType = m_ObjItemStateLiquid[m_ItemDataList.GetSelection()];
-		
-		UpdateQuantityItemColor();
-		UpdatePreviewItemState();
+		if ( eid == UIEvent.CLICK && m_Categories && m_FilterButton )
+			m_Categories.Toggle( m_FilterButton.GetLayoutRoot() );
 	}
 
-	void Click_SetHealth( UIEvent eid, UIActionBase action )
+	//! The picker's change callback: "" is everything, otherwise the config base class to filter on.
+	void OnCategoryChanged( string type )
 	{
-		if ( eid != UIEvent.CHANGE )
-			return;
+		m_Module.m_CurrentType = type;
+		m_Module.m_CurrentScriptType = type.ToType();
 
-		UpdateHealthItemColor();
-		UpdateItemPreview();
-	}
-
-	void Click_SetTemperature( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CHANGE )
-			return;
-
-		UpdateTemperatureItemColor();
-		UpdateItemPreview();
-	}
-
-	void UpdateItemStateType(int mode, int liquidType = 0)
-	{
-		m_ItemStateType = mode;
-
-		int idx = -1;
-
-		switch (mode)
-		{
-			case 0: // Liquids
-				m_ItemDataList.SetItems(m_ObjItemStateLiquidText);
-				idx = m_ObjItemStateLiquid.Find(m_LiquidType);
-				if (idx == -1)
-				{
-					idx = m_ObjItemStateLiquid.Find(liquidType);  //! Fallback
-					m_LiquidType = liquidType;
-				}
-				break;
-			case 1: // Blood
-				m_ItemDataList.SetItems(m_ObjItemStateBloodText);
-				idx = FindEnumValue(COT_BloodTypes, m_LiquidType);
-				if (idx == -1)
-				{
-					idx = FindEnumValue(COT_BloodTypes, liquidType);  //! Fallback
-					m_LiquidType = liquidType;
-				}
-				break;
-			case 2: // Food
-				m_ItemDataList.SetItems(m_ObjItemStateFoodText);
-				break;
-		}
-
-		// Reset to default since 0 is used for UNKNOWN
-		if (idx == -1)
-			idx = 1;
-
-		m_ItemDataList.SetSelection(idx, false);
-		
-		UpdateQuantityItemColor();
-		UpdatePreviewItemState();
-	}
-
-	int FindEnumValue(typename e, int enumValue)
-	{
-		int cnt = e.GetVariableCount();
-		int val;
-
-		for (int i = 0; i < cnt; i++)
-		{
-			if (e.GetVariableType(i) == int && e.GetVariableValue(null, i, val) && val == enumValue)
-				return i;
-		}
-
-		return -1;
-	}
-
-	void UpdatePreviewItemState()
-	{
-		Edible_Base edible;
-		if (Class.CastTo(edible, m_PreviewItem) && edible.HasFoodStage())
-			edible.GetFoodStage().ChangeFoodStage(m_ItemDataList.GetSelection());
-	}
-
-	void UpdateQuantityItemColor()
-	{
-		int color;
-
-		if (!m_ObjItemStateLiquidColors.Find(m_LiquidType, color))
-			color = COLOR_WHITE;
-
-		m_QuantityItem.SetColor( color );
-		m_QuantityItem.SetAlpha( 1.0 );
-	}
-
-	void UpdateHealthControls(string type)
-	{
-		float maxHealth = MiscGameplayFunctions.GetTypeMaxGlobalHealth(type);
-		if (maxHealth > 0)
-		{
-			m_HealthItem.Enable();
-			m_HealthItem.SetMinMax(0, maxHealth);
-		}
-		else
-		{
-			m_HealthItem.Disable();
-		}
-	}
-
-	void UpdateHealthItemColor()
-	{
-		if (!m_HealthItem.IsEnabled())
-		{
-			m_HealthItem.SetColor( ARGB( 255, 220, 220, 220 ) );
-			return;
-		}
-
-		float health = m_HealthItem.GetCurrent();
-		float health01;
-		float sliderMax = m_HealthItem.GetMax();
-
-		if (sliderMax > 0)
-			health01 = health / sliderMax;
-
-		if ( health01 >= 0.7 )			m_HealthItem.SetColor( Colors.COLOR_PRISTINE );
-		else if ( health01 >= 0.5 )		m_HealthItem.SetColor( Colors.COLOR_WORN );
-		else if ( health01 >= 0.3 )		m_HealthItem.SetColor( Colors.COLOR_DAMAGED );
-		else if ( health01 > 0 )		m_HealthItem.SetColor( Colors.COLOR_BADLY_DAMAGED );
-		else							m_HealthItem.SetColor( Colors.COLOR_RUINED );
-
-		m_HealthItem.SetAlpha( 1.0 );
-	}
-	
-
-	void UpdateTemperatureItemColor()
-	{
-		int value = m_TemperatureItem.GetCurrent();
-
-		m_TemperatureItem.SetColor( ObjectTemperatureState.GetStateData(value).m_Color );
-		if (ObjectTemperatureState.GetStateData(value).m_State != GameConstants.STATE_NEUTRAL_TEMP)
-			m_TemperatureItem.SetFormat( "#STR_COT_FORMAT_DEGREE " + ObjectTemperatureState.GetStateData(value).m_LocalizedName );
-		else
-			m_TemperatureItem.SetFormat("#STR_COT_FORMAT_DEGREE");
-
-		m_TemperatureItem.SetAlpha( 1.0 );
-	}
-
-	void Click_OnSafetyToogle( UIEvent eid, UIActionBase action )	
-	{
-		if ( eid != UIEvent.CLICK )
-			return;
-
-		m_Module.m_AllowRestrictedClassNames = action.IsChecked();
 		UpdateList();
 	}
 
-	void Click_OnFilterDisplayName( UIEvent eid, UIActionBase action )	
+	//! DEPRECATED - use JMItemCategoryPicker.CategoryTable().
+	static void CategoryTable( out TStringArray ids, out TStringArray icons, out TStringArray labels )
 	{
-		if ( eid != UIEvent.CLICK )
+		JMDeprecated.WarnOnce( null, "JMObjectSpawnerForm.CategoryTable() is deprecated. Please use JMItemCategoryPicker.CategoryTable()." );
+		JMItemCategoryPicker.CategoryTable( ids, icons, labels );
+	}
+
+	//! DEPRECATED - use JMItemCategoryPicker.CategoryGroupTable().
+	static void CategoryGroupTable( out TStringArray ids, out TStringArray icons, out TStringArray labels )
+	{
+		JMDeprecated.WarnOnce( null, "JMObjectSpawnerForm.CategoryGroupTable() is deprecated. Please use JMItemCategoryPicker.CategoryGroupTable()." );
+		JMItemCategoryPicker.CategoryGroupTable( ids, icons, labels );
+	}
+
+	//! DEPRECATED - use JMItemCategoryPicker.CategoryGroupMembers().
+	static TStringArray CategoryGroupMembers( string groupId )
+	{
+		JMDeprecated.WarnOnce( null, "JMObjectSpawnerForm.CategoryGroupMembers() is deprecated. Please use JMItemCategoryPicker.CategoryGroupMembers()." );
+		return JMItemCategoryPicker.CategoryGroupMembers( groupId );
+	}
+
+	void Click_OnSafetyToogle( UIEvent eid, UIActionBase action )
+	{
+		if ( eid != UIEvent.CHANGE )
 			return;
 
-		m_Module.m_FilterWithDisplayName = action.IsChecked();
+		m_Module.m_AllowRestrictedClassNames = ( action.GetSelection() == 1 );
 		UpdateList();
 	}
 
-	void Click_ObjSetupMode( UIEvent eid, UIActionBase action )	
+	void Click_OnFilterDisplayName( UIEvent eid, UIActionBase action )
+	{
+		if ( eid != UIEvent.CHANGE )
+			return;
+
+		m_Module.m_FilterWithDisplayName = ( action.GetSelection() == 1 );
+		UpdateList();
+	}
+
+	void Click_ObjSetupMode( UIEvent eid, UIActionBase action )
 	{
 		if ( eid != UIEvent.CHANGE )
 			return;
 
 		m_Module.m_ObjSetupMode = action.GetSelection();
+
+		UpdateItemPreview();
 	}
 
-	void Click_SpawnObject( UIEvent eid, UIActionBase action )
+	void Click_SpawnObject( UIActionBase action )
 	{
-		if ( eid != UIEvent.CLICK )
-			return;
-
 		SpawnObject(s_ObjSpawnMode);
-	}
-
-	void AddObjectType( Widget parent, string name, string config )
-	{
-		name = Widget.TranslateString( name );
-		UIActionManager.CreateButton( parent, name, this, "SetListType" );
-		m_ObjectTypes.Insert( name, config );
 	}
 
 	void UpdateRotation( int mouse_x, int mouse_y, bool is_dragging )
 	{
 		m_Orientation[0] = m_Orientation[0] + ( ( m_MouseY - mouse_y ) * 0.01 );
 		m_Orientation[1] = m_Orientation[1] - ( ( m_MouseX - mouse_x ) * 0.01 );
-			
+
 		m_ItemPreview.SetModelOrientation( m_Orientation );
 	}
 
@@ -512,19 +515,21 @@ class JMObjectSpawnerForm: JMFormBase
 		float radius = m_PreviewItem.ClippingInfo(minMax);
 
 		m_Distance = m_Distance - (wheel * radius / 10.0);
-		
+
 		m_ItemPreview.SetModelPosition( Vector( m_Distance, 0, 0.5 + m_Distance ) );
 	}
 
 	void UpdateItemPreview()
 	{
 		#ifdef COT_DEBUGLOGS
-		Print( "+" + this + "::UpdateItemPreview" );
+		Print( "+JMObjectSpawnerForm::UpdateItemPreview" );
 		#endif
-		
+
 		string strSelection = GetCurrentSelection();
 
-		if (m_PreviewItem && m_PreviewItem.GetType() != strSelection) 
+		bool modeChanged = m_PreviewSetupMode != m_Module.m_ObjSetupMode;
+
+		if (m_PreviewItem && (m_PreviewItem.GetType() != strSelection || modeChanged))
 		{
 			g_Game.ObjectDelete( m_PreviewItem );
 			m_PreviewItem = null;
@@ -533,12 +538,17 @@ class JMObjectSpawnerForm: JMFormBase
 		if (!m_PreviewItem)
 		{
 			m_PreviewItem = EntityAI.Cast( g_Game.CreateObject( strSelection, vector.Zero, true, false, false ) );
+			m_PreviewSetupMode = m_Module.m_ObjSetupMode;
 
 			if (m_PreviewItem)
 			{
 				dBodyActive(m_PreviewItem, ActiveState.INACTIVE);
 				dBodyDynamic(m_PreviewItem, false);
 				m_PreviewItem.DisableSimulation(true);
+
+				//! XXX: Do NOT try to use OnDebugSpawn, SetupEntityForMode, SpawnCompatibleAttachments etc here,
+				//! it's unsafe to run on client and also slows down scrolling through the list of items
+
 				m_ItemPreview.SetItem( m_PreviewItem );
 
 				m_Distance = 0;
@@ -550,100 +560,23 @@ class JMObjectSpawnerForm: JMFormBase
 			}
 		}
 
-		m_QuantityItem.Disable();
-		UpdateHealthControls(strSelection);
-		UpdateHealthItemColor();
-		m_TemperatureItem.Disable();
-
-		int itemStateType = m_ItemStateType;
+		m_Props.Rebuild( strSelection );
 
 		if ( m_PreviewItem )
 		{
-			if (m_HealthItem.IsEnabled() && !m_PreviewItem.IsTransport())
-				m_PreviewItem.SetHealth("", "", m_HealthItem.GetCurrent());
-
-			if (m_PreviewItem.IsInherited(ItemBase)) 
-			{
-				ItemBase item = ItemBase.Cast(m_PreviewItem);
-
-				if ( item.IsLiquidContainer() )
-				{
-					if ( item.IsBloodContainer() )
-					{
-						itemStateType = 1;
-					}
-					else
-					{
-						m_TemperatureItem.Enable();
-						itemStateType = 0;
-					}
-					int liquidType = item.GetLiquidTypeInit();
-					if ( m_ItemStateType != itemStateType || m_LiquidType != liquidType )
-						UpdateItemStateType(itemStateType, liquidType);
-				}
-				else
-				{
-					if ( item.HasFoodStage() && item.CanBeCooked() )
-					{
-						m_TemperatureItem.Enable();
-						
-						if ( m_ItemStateType != 2 )
-							UpdateItemStateType(2);
-					}
-					else
-					{
-						m_ItemStateType = -1;
-						m_LiquidType = 0;
-					}
-				}
-
-				Magazine mag;
-				if (Class.CastTo(mag, item))
-				{
-					if (mag.GetAmmoMax() > 0)
-					{
-						float min;
-
-						if ( mag.IsAmmoPile() && mag.GetAmmoMax() > 1 )
-							min = 1.0;
-						else
-							min = 0.0;
-
-						m_QuantityItem.SetMinMax(min, mag.GetAmmoMax());
-						m_QuantityItem.SetStepValue(1);
-						m_QuantityItem.Enable();
-					}
-				}
-				else if (item.GetQuantityMax() - item.GetQuantityMin() > 0)
-				{
-					if ( item.IsSplitable() )
-						m_QuantityItem.SetStepValue(1);
-					else
-						m_QuantityItem.SetStepValue(0.1);
-
-					m_QuantityItem.SetMinMax(item.GetQuantityMin(), item.GetQuantityMax());
-					m_QuantityItem.Enable();
-				}
-			}
+			// Same pass the spawn runs - see JMObjectSpawnerProperties.RefreshPreviewHealth.
+			// temp stays -1 - the temperature slider is a spawn-time value and
+			// has nothing to show in the preview.
+			m_Props.RefreshPreviewHealth();
+			m_Props.RefreshPreviewFoodStage();
 		}
 		else
 		{
 			m_ItemPreview.Show( false );
 		}
 
-		if (m_ItemStateType > -1)
-		{
-			m_ItemDataList.Enable();
-		}		
-		else if (m_ItemStateType != itemStateType)
-		{
-			m_ItemDataList.SetItems({""});
-			UpdateQuantityItemColor();
-			m_ItemDataList.Disable();
-		}
-
 		#ifdef COT_DEBUGLOGS
-		Print( "-" + this + "::UpdateItemPreview" );
+		Print( "-JMObjectSpawnerForm::UpdateItemPreview" );
 		#endif
 	}
 
@@ -661,16 +594,23 @@ class JMObjectSpawnerForm: JMFormBase
 		m_ItemPreview.Show(false);
 	}
 
-	override bool OnItemSelected( Widget w, int x, int y, int row, int column, int oldRow, int oldColumn )
+	void OnClick_ClassList( UIEvent eid, UIActionBase action )
 	{
-		if ( w == m_ClassList ) 
+		if ( eid == UIEvent.CLICK )
 		{
 			UpdateItemPreview();
 
-			return true;
+			if ( m_ClassList.GetLastClickButton() == MouseState.RIGHT && m_RowMenu )
+				m_RowMenu.Open( GetCurrentSelection() );
+
+			return;
 		}
 
-		return false;
+		//! A double click spawns what was just selected. CLICK is raised first,
+		//! so the preview and the property rows are already the ones being
+		//! spawned by the time this runs.
+		if ( eid == UIEvent.DOUBLE_CLICK )
+			SpawnObject( s_ObjSpawnMode );
 	}
 
 	override bool OnMouseButtonDown( Widget w, int x, int y, int button )
@@ -700,28 +640,69 @@ class JMObjectSpawnerForm: JMFormBase
 		return super.OnMouseWheel( w, x, y, wheel );
 	}
 
-	override bool OnDoubleClick( Widget w, int x, int y, int button )
+	// Reflect s_ObjSpawnMode on the Spawn button label and enable/disable the Setup dropdown.
+	//! Add one entry to a dropdown and record which COT_ObjectSpawnerMode it stands for.
+	//! Entry text is printed verbatim (unlike a label it does not translate), so the key is
+	//! resolved here.
+	protected void AddMode( TIntArray ids, array<string> labels, int mode, string label )
 	{
-		super.OnDoubleClick( w, x, y, button );
-
-		if ( w == m_ClassList && button == MouseState.LEFT )
-		{
-			SpawnObject(s_ObjSpawnMode);
-			
-			return true;
-		}
-
-		return false;
+		ids.Insert( mode );
+		labels.Insert( label );
 	}
 
-	void SetListType( UIEvent eid, UIActionBase action )
+	protected int IndexOfMode( TIntArray ids, int mode )
 	{
-		if ( eid != UIEvent.CLICK )
-			return;
+		int index = ids.Find( mode );
 
-		m_Module.m_CurrentType = m_ObjectTypes.Get( action.GetButton() );
+		if ( index < 0 )
+			return 0;
 
-		UpdateList();
+		return index;
+	}
+
+	protected int ModeAt( TIntArray ids, int index )
+	{
+		if ( index < 0 || index >= ids.Count() )
+			return -1;
+
+		return ids[index];
+	}
+
+	//! Name the destination on the button. The clipboard modes have their own
+	//! card and their own button now, so this no longer has to rename Spawn
+	//! into something that does not spawn, or disable the Setup dropdown to
+	//! stop it from claiming to apply.
+	void SyncSpawnButtonLabel()
+	{
+		string label = "#STR_COT_OBJECT_MODULE_SPAWN";
+
+		switch ( s_ObjSpawnMode )
+		{
+			case COT_ObjectSpawnerMode.CURSOR:
+				label = "#STR_COT_OBJECT_MODULE_SPAWN_AT_CROSSHAIR";
+				break;
+
+			case COT_ObjectSpawnerMode.PLAYER_POSITION:
+				label = "#STR_COT_OBJECT_MODULE_SPAWN_AT_PLAYER";
+				break;
+
+			case COT_ObjectSpawnerMode.TARGET_INVENTORY:
+				label = "#STR_COT_OBJECT_MODULE_SPAWN_AT_TARGET";
+				break;
+
+			case COT_ObjectSpawnerMode.PLAYER_INVENTORY:
+				if ( g_Game.IsMultiplayer() )
+					label = "#STR_COT_OBJECT_MODULE_SPAWN_IN_PLAYERS";
+				else
+					label = "#STR_COT_OBJECT_MODULE_SPAWN_IN_OWN";
+				break;
+
+			case COT_ObjectSpawnerMode.OBJECT_INVENTORY:
+				label = "#STR_COT_OBJECT_MODULE_SPAWN_IN_OBJECTS";
+				break;
+		}
+
+		m_SpawnButton.SetButton( label );
 	}
 
 	void ChangeSpawnMode( UIEvent eid, UIActionBase action )
@@ -729,106 +710,57 @@ class JMObjectSpawnerForm: JMFormBase
 		if ( eid != UIEvent.CHANGE )
 			return;
 
-		s_ObjSpawnMode = action.GetSelection();
-		
-		switch (s_ObjSpawnMode)
-		{
-			default:
-			case COT_ObjectSpawnerMode.PLAYER_POSITION:
-			case COT_ObjectSpawnerMode.CURSOR:
-			case COT_ObjectSpawnerMode.TARGET_INVENTORY:
-			case COT_ObjectSpawnerMode.PLAYER_INVENTORY:
-			case COT_ObjectSpawnerMode.OBJECT_INVENTORY:
-				m_SpawnButton.SetButton("#STR_COT_OBJECT_MODULE_SPAWN_ON");
-				m_AttachmentsButton.Enable();
-				m_ObjSetupMode.Enable();
-			break;
-			case COT_ObjectSpawnerMode.COPYLISTRAW:
-			case COT_ObjectSpawnerMode.COPYLISTTYPES:
-		#ifdef DZ_Expansion_Market
-			case COT_ObjectSpawnerMode.COPYLISTEXPMARKET:
-		#endif
-				m_SpawnButton.SetButton("#STR_COT_TO_CLIPBOARD:");
-				m_AttachmentsButton.Disable();
-				m_ObjSetupMode.Disable();
-			break;
-		}
+		int mode = ModeAt( m_SpawnModeIds, action.GetSelection() );
+
+		if ( mode < 0 )
+			return;
+
+		s_ObjSpawnMode = mode;
+		SyncSpawnButtonLabel();
 	}
 
-	void SpawnObject(int mode = COT_ObjectSpawnerMode.CURSOR)
+	void ChangeExportMode( UIEvent eid, UIActionBase action )
+	{
+		if ( eid != UIEvent.CHANGE )
+			return;
+
+		int mode = ModeAt( m_ExportModeIds, action.GetSelection() );
+
+		if ( mode < 0 )
+			return;
+
+		s_ObjExportMode = mode;
+	}
+
+	void Click_CopyList( UIActionBase action )
+	{
+		ExportList( s_ObjExportMode );
+	}
+
+	//! Put the CURRENT LIST on the clipboard in one of the export formats. Always from
+	//! m_ListClasses, never the row text: rows carry display names while that filter is on,
+	//! useless in these formats.
+	void ExportList( int mode )
 	{
 		string clipboardOutput = "";
-		string result;
 
-		int itemState = 0; // 0 mean don't do anything
-		if ( m_ItemStateType != -1 )
+		if ( m_ListClasses.Count() == 0 )
 		{
-			itemState = m_ItemDataList.GetSelection();
-			if (m_ItemStateType == 0)
-			{
-				//! Liquid
-				itemState = m_ObjItemStateLiquid[itemState];
-			#ifdef DIAG
-				PrintFormat("Liquid type %1 %2", itemState, Liquid.GetNutritionalProfileByType(itemState).GetLiquidClassname());
-			#endif
-			}
+			COTCreateLocalAdminNotification( new StringLocaliser( "STR_COT_OBJECT_MODULE_EXPORT_EMPTY" ) );
+			return;
 		}
 
-		float health = m_HealthItem.GetCurrent();
-		float temp = m_TemperatureItem.GetCurrent();
-		float quantity = m_QuantityItem.GetCurrent();
-
-		switch (mode)
+		switch ( mode )
 		{
-			default:
-			case COT_ObjectSpawnerMode.PLAYER_POSITION:
-				m_Module.SpawnEntity_Position(GetCurrentSelection(), g_Game.GetPlayer().GetPosition(), quantity, health, temp, itemState);
-				break;
-
-			case COT_ObjectSpawnerMode.CURSOR:
-				m_Module.SpawnEntity_Position(GetCurrentSelection(), GetCursorPos(), quantity, health, temp, itemState);
-				break;
-
-			case COT_ObjectSpawnerMode.TARGET_INVENTORY:
-				m_Module.SpawnEntity_Position(GetCurrentSelection(), GetCursorPos(), quantity, health, temp, itemState, true);
-				break;
-
-			case COT_ObjectSpawnerMode.PLAYER_INVENTORY:
-				m_Module.SpawnEntity_Inventory(GetCurrentSelection(), JM_GetSelected().GetPlayers(), quantity, health, temp, itemState);
-				break;
-
-			case COT_ObjectSpawnerMode.OBJECT_INVENTORY:
-				m_Module.SpawnEntity_Inventory(GetCurrentSelection(), JM_GetSelected().GetObjects(), quantity, health, temp, itemState);
-				break;
-
-			case COT_ObjectSpawnerMode.COPYLISTRAW:
-				for (int i = 0; i < m_ClassList.GetNumItems(); i++)
-				{
-					m_ClassList.GetItemText(i, 0, result);
-					clipboardOutput += result + "\n";
-				}
-				g_Game.CopyToClipboard(clipboardOutput);
-				break;
-
 			case COT_ObjectSpawnerMode.COPYLISTTYPES:
 				clipboardOutput = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
 				clipboardOutput += "<types>\n";
-				for (int j = 0; j < m_ClassList.GetNumItems(); j++)
-				{
-					m_ClassList.GetItemText(j, 0, result);
-					clipboardOutput += "	<type name=\"" + result + "\">\n";
-					clipboardOutput += "		<nominal>0</nominal>\n";
-					clipboardOutput += "		<lifetime>3888000</lifetime>\n";
-					clipboardOutput += "		<restock>0</restock>\n";
-					clipboardOutput += "		<min>0</min>\n";
-					clipboardOutput += "		<quantmin>-1</quantmin>\n";
-					clipboardOutput += "		<quantmax>-1</quantmax>\n";
-					clipboardOutput += "		<cost>100</cost>\n";
-					clipboardOutput += "		<flags count_in_cargo=\"0\" count_in_hoarder=\"0\" count_in_map=\"1\" count_in_player=\"0\" crafted=\"0\" deloot=\"0\"/>\n";
-					clipboardOutput += "	</type>\n";
-				}
+
+				for ( int j = 0; j < m_ListClasses.Count(); j++ )
+					clipboardOutput += BuildTypesXmlEntry( m_ListClasses[j] );
+
 				clipboardOutput += "</types>";
-				g_Game.CopyToClipboard(clipboardOutput);
+				COTFeedback.Copy( clipboardOutput );
 				break;
 
 		#ifdef DZ_Expansion_Market
@@ -839,67 +771,177 @@ class JMObjectSpawnerForm: JMFormBase
 				category.Defaults();
 				category.DisplayName = m_SearchBox.GetText();
 
-				for (int k = 0; k < m_ClassList.GetNumItems(); k++)
+				for ( int k = 0; k < m_ListClasses.Count(); k++ )
 				{
-					m_ClassList.GetItemText(k, 0, result);
-					auto item = new ExpansionMarketItem(-1, result, 100, 100, 1, 1);
-					category.Items.Insert(item);
+					auto item = new ExpansionMarketItem( -1, m_ListClasses[k], 100, 100, 1, 1 );
+					category.Items.Insert( item );
 				}
 
 				string errorMsg;
-				if (JsonFileLoader<ExpansionMarketCategory>.MakeData(category, categoryJSON, errorMsg))
-					g_Game.CopyToClipboard(categoryJSON);
+
+				if ( JsonFileLoader<ExpansionMarketCategory>.MakeData( category, categoryJSON, errorMsg ) )
+					COTFeedback.Copy( categoryJSON );
 				else
-					COTCreateLocalAdminNotification(new StringLocaliser(errorMsg));
+					COTCreateLocalAdminNotification( new StringLocaliser( errorMsg ) );
 				break;
 		#endif
+
+			case COT_ObjectSpawnerMode.COPYLISTRAW:
+			default:
+				for ( int i = 0; i < m_ListClasses.Count(); i++ )
+					clipboardOutput += m_ListClasses[i] + "\n";
+
+				COTFeedback.Copy( clipboardOutput );
+				break;
 		}
 	}
 
+	//! One <type> block for `className` - the same shape ExportList's TYPES
+	//! mode writes for every row, shared so the row menu's single-item copy
+	//! matches the list export exactly.
+	string BuildTypesXmlEntry( string className )
+	{
+		string entry = "	<type name=\"" + className + "\">\n";
+		entry += "		<nominal>0</nominal>\n";
+		entry += "		<lifetime>3888000</lifetime>\n";
+		entry += "		<restock>0</restock>\n";
+		entry += "		<min>0</min>\n";
+		entry += "		<quantmin>-1</quantmin>\n";
+		entry += "		<quantmax>-1</quantmax>\n";
+		entry += "		<cost>100</cost>\n";
+		entry += "		<flags count_in_cargo=\"0\" count_in_hoarder=\"0\" count_in_map=\"1\" count_in_player=\"0\" crafted=\"0\" deloot=\"0\"/>\n";
+		entry += "	</type>\n";
+		return entry;
+	}
+
+#ifdef DZ_Expansion_Market
+	//! A one-item Expansion market category, same shape ExportList's
+	//! COPYLISTEXPMARKET mode writes for the whole list - the row menu's
+	//! single-item equivalent.
+	void CopyMarketEntry( string className )
+	{
+		auto category = new ExpansionMarketCategory();
+		category.Defaults();
+		category.DisplayName = className;
+
+		auto item = new ExpansionMarketItem( -1, className, 100, 100, 1, 1 );
+		category.Items.Insert( item );
+
+		string categoryJSON;
+		string errorMsg;
+
+		if ( JsonFileLoader<ExpansionMarketCategory>.MakeData( category, categoryJSON, errorMsg ) )
+			COTFeedback.Copy( categoryJSON );
+		else
+			COTCreateLocalAdminNotification( new StringLocaliser( errorMsg ) );
+	}
+#endif
+
+	void SpawnObject(int mode = COT_ObjectSpawnerMode.CURSOR)
+	{
+		string selection = GetCurrentSelection();
+
+		if ( selection == "" )
+		{
+			COTCreateLocalAdminNotification( new StringLocaliser( "STR_COT_OBJECT_MODULE_NO_SELECTION" ) );
+			return;
+		}
+
+		//! -1 is the module's "not specified" for all three, so an absent property is not sent.
+		//! Health and quantity travel as a PAIR: low end as the value, high end as module state
+		//! alongside the setup mode. The server rolls between them once per entity, so one call
+		//! filling five inventories gives five different results.
+		float health;
+		float temp;
+		float quantity;
+		int itemState;
+		m_Props.ReadSpawnValues( health, temp, quantity, itemState );
+
+		switch (mode)
+		{
+			case COT_ObjectSpawnerMode.CURSOR:
+				m_Module.SpawnEntity_Position(selection, GetCursorPos(), quantity, health, temp, itemState);
+				break;
+
+			case COT_ObjectSpawnerMode.TARGET_INVENTORY:
+				m_Module.SpawnEntity_Position(selection, GetCursorPos(), quantity, health, temp, itemState, true);
+				break;
+
+			case COT_ObjectSpawnerMode.PLAYER_INVENTORY:
+				m_Module.SpawnEntity_Inventory(selection, JM_GetSelected().GetPlayers(), quantity, health, temp, itemState);
+				break;
+
+			case COT_ObjectSpawnerMode.OBJECT_INVENTORY:
+				m_Module.SpawnEntity_Inventory(selection, JM_GetSelected().GetObjects(), quantity, health, temp, itemState);
+				break;
+
+			case COT_ObjectSpawnerMode.PLAYER_POSITION:
+			default:
+				m_Module.SpawnEntity_Position(selection, g_Game.GetPlayer().GetPosition(), quantity, health, temp, itemState);
+				break;
+		}
+	}
+
+	override bool OnBeforeConfirmInline( COT_ScriptedWidgetEventHandler action )
+	{
+		if ( action == m_DeleteCursorBtn )
+		{
+			Object obj = m_Module.GetObjectAtCursor();
+
+			if ( !obj )
+				return false;
+
+			m_PendingDeleteCursorObj = obj;
+		}
+
+		return true;
+	}
+
+	//! Fired by m_DeleteCursorBtn on CHANGE, i.e. once the confirm/cancel pair
+	//! has actually been confirmed - by a mouse click on Confirm, or by a
+	//! second keybind press via DeleteCursor(Object) below.
 	void DeleteCursor( UIEvent eid, UIActionBase action )
 	{
-		if ( eid != UIEvent.CLICK )
+		if ( eid != UIEvent.CHANGE )
 			return;
 
-		Object obj = m_Module.GetObjectAtCursor();
+		Object obj = m_PendingDeleteCursorObj;
+		m_PendingDeleteCursorObj = null;
 
-		if ( obj )
-			 DeleteCursor(obj);
-	}
-
-	void DeleteCursor(Object obj)
-	{
-		m_DeletingObject = obj;
-		
-		CreateConfirmation_Two( JMConfirmationType.INFO, "#STR_COT_GENERIC_CONFIRM", string.Format( Widget.TranslateString( "#STR_COT_OBJECT_MODULE_DELETE_CONFIRMATION_BODY" ), Object.GetDebugName( obj ) ), "#STR_COT_GENERIC_NO", "DeleteEntity_No", "#STR_COT_GENERIC_YES", "DeleteEntity_Yes" );
-	}
-
-	private void DeleteEntity_Yes( JMConfirmation confirmation )
-	{
-		m_Module.DeleteEntity( m_DeletingObject );
-
-		m_DeletingObject = NULL;
-
-		if (m_Module.m_AutoShow)
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Call(m_Module.Hide);  //! Hide after a delay so we can still block actions
-	}
-
-	private void DeleteEntity_No( JMConfirmation confirmation )
-	{
-		m_DeletingObject = NULL;
-
-		if (m_Module.m_AutoShow)
-			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).Call(m_Module.Hide);  //! Hide after a delay so we can still block actions
-	}
-
-	void SearchInput_OnClickReset( UIEvent eid, UIActionBase action )
-	{
-		if ( eid != UIEvent.CLICK )
+		if ( !obj )
 			return;
 
-		m_SearchBox.SetText("");
-		m_Module.m_SearchText = "";
-		UpdateList();
+		m_Module.DeleteEntity( obj );
+
+		if ( m_Module.m_AutoShow )
+			g_Game.GetCallQueue( CALL_CATEGORY_SYSTEM ).Call( m_Module.Hide );
+	}
+
+	//! Keybind entry point. First press on a target arms m_DeleteCursorBtn
+	//! (same confirm/cancel morph + timeout as clicking it) instead of
+	//! deleting outright. A second press while still armed on the SAME
+	//! target confirms; aiming elsewhere re-arms on the new target.
+	void DeleteCursor( Object obj )
+	{
+		if ( !obj || !m_DeleteCursorBtn )
+			return;
+
+		if ( m_DeleteCursorBtn.IsPending() && m_PendingDeleteCursorObj == obj )
+		{
+			m_DeleteCursorBtn.ConfirmPending();
+			return;
+		}
+
+		m_PendingDeleteCursorObj = obj;
+		m_DeleteCursorBtn.Arm();
+	}
+
+	override void SetConfirmInlinePendingState( bool pending )
+	{
+		if ( pending && m_PendingDeleteCursorObj )
+			GetWindow().SetTitle( string.Format( "#STR_COT_OBJECT_MODULE_DELETE %1?", m_PendingDeleteCursorObj.GetDisplayName() ) );
+		else
+			GetWindow().SetTitle( m_Module.GetTitle() );
 	}
 
 	void SearchInput_OnChange( UIEvent eid, UIActionBase action )
@@ -908,23 +950,71 @@ class JMObjectSpawnerForm: JMFormBase
 		UpdateList();
 	}
 
+	protected void ReportExactClassRejection( string searchText, TStringArray configs )
+	{
+		string searchLower = searchText;
+		searchLower.ToLower();
+
+		foreach ( string cfgPath: configs )
+		{
+			int count = g_Game.ConfigGetChildrenCount( cfgPath );
+			for ( int i = 0; i < count; i++ )
+			{
+				string name;
+				g_Game.ConfigGetChildName( cfgPath, i, name );
+
+				string nameLower = name;
+				nameLower.ToLower();
+
+				if ( nameLower != searchLower )
+					continue;
+
+				int scope = g_Game.ConfigGetInt( cfgPath + " " + name + " scope" );
+				if ( scope == 0 || (scope == 1 && !m_Module.m_AllowRestrictedClassNames) )
+				{
+					COTCreateLocalAdminNotification( new StringLocaliser( name + " " + Widget.TranslateString( "#STR_COT_OBJECT_MODULE_REJECT_SCOPE" ) ) );
+					return;
+				}
+
+				string model;
+				if ( !g_Game.ConfigGetText( cfgPath + " " + name + " model", model ) || model == string.Empty || model == "bmp" )
+				{
+					COTCreateLocalAdminNotification( new StringLocaliser( name + " " + Widget.TranslateString( "#STR_COT_OBJECT_MODULE_REJECT_NO_MODEL" ) ) );
+					return;
+				}
+
+				if ( m_Module.IsExcludedClassName( nameLower ) )
+				{
+					COTCreateLocalAdminNotification( new StringLocaliser( name + " " + Widget.TranslateString( "#STR_COT_OBJECT_MODULE_REJECT_BLACKLISTED" ) ) );
+					return;
+				}
+
+				// Class exists and passed all filters - no rejection to report.
+				return;
+			}
+		}
+	}
+
 	void UpdateList()
 	{
-	#ifdef DIAG_DEVELOPER
+	#ifdef DIAG
 		int ticks = TickCount(0);
 	#endif
 
-		m_ClassList.ClearItems();
-		string closestMatch;
-		
+		m_ListClasses.Clear();
+
+		//! What the rows SHOW, and what they show beside it. In display-name
+		//! mode the class name becomes the secondary column rather than being
+		//! hidden - it is still the thing an admin has to type anywhere else.
+		array<string> rowLabels = new array<string>;
+		array<string> rowSubs   = new array<string>;
+
 		TStringArray configs = new TStringArray;
 		configs.Insert( CFG_VEHICLESPATH );
 		configs.Insert( CFG_WEAPONSPATH );
 		configs.Insert( CFG_MAGAZINESPATH );
 
-		COT_String strSearch = m_Module.m_SearchText;
-		bool requireAllKeywords;
-		TStringArray keywords = strSearch.KeywordSearch_Prepare(requireAllKeywords);
+		JMSearchMatcher matcher = new JMSearchMatcher(m_Module.m_SearchText);
 
 		for ( int nConfig; nConfig < configs.Count(); nConfig++ )
 		{
@@ -935,6 +1025,8 @@ class JMObjectSpawnerForm: JMFormBase
 			for ( int nClass = 0; nClass < nClasses; nClass++ )
 			{
 				string strName;
+				string strDisplay;
+				string strRowText;
 
 				g_Game.ConfigGetChildName( strConfigPath, nClass, strName );
 
@@ -947,51 +1039,61 @@ class JMObjectSpawnerForm: JMFormBase
 				if (!g_Game.ConfigGetText(strConfigPath + " " + strName + " model", model) || model == string.Empty || model == "bmp")
 					continue;
 
-				COT_String strNameLower = strName;
+				typename type = strName.ToType();
 
-				strNameLower.ToLower();
-
-				if (m_Module.m_CurrentType == "" || g_Game.IsKindOf( strNameLower, m_Module.m_CurrentType ) )
+				if (m_Module.m_CurrentType == "" || g_Game.IsKindOf( strName, m_Module.m_CurrentType ) || ( type && m_Module.m_CurrentScriptType && type.IsInherited( m_Module.m_CurrentScriptType ) ) )
 				{
-					if ( m_Module.IsExcludedClassName( strNameLower ) ) 
+					string strNameLower = strName;
+					strNameLower.ToLower();
+
+					if ( m_Module.IsExcludedClassName( strNameLower ) )
 						continue;
-					
+
+					COT_String strNameSearch = strNameLower;
 					if (m_Module.m_FilterWithDisplayName)
 					{
-						if (!g_Game.ConfigGetText(strConfigPath + " " + strName + " displayName", strNameLower))
+						if (!g_Game.ConfigGetText(strConfigPath + " " + strName + " displayName", strNameSearch))
 							continue;
 
-						strNameLower.ToLower();
+						strNameSearch.ToLower();
 					}
 
-					if ( strSearch != "" )
+					if ( !matcher.Matches(strNameSearch) )
+						continue;
+
+					// Display-name mode changes what the row SHOWS, not what it
+					// means. The class name goes into m_ListClasses either way -
+					// spawning and the clipboard exports read from there.
+					strRowText = strName;
+
+					if (m_Module.m_FilterWithDisplayName)
 					{
-						if (!strNameLower.KeywordSearchImplEx(strSearch, keywords, requireAllKeywords, closestMatch))
-							continue;
+						if (g_Game.ConfigGetText(strConfigPath + " " + strName + " displayName", strDisplay) && strDisplay != "")
+							strRowText = strDisplay;
 					}
 
-					m_ClassList.AddItem( strName, NULL, 0 );
+					rowLabels.Insert( strRowText );
+
+					if ( strRowText == strName )
+						rowSubs.Insert( "" );
+					else
+						rowSubs.Insert( strName );
+
+					m_ListClasses.Insert( strName );
 				}
 			}
 		}
 
-	#ifdef DIAG_DEVELOPER
+		m_ClassList.SetItems( rowLabels, rowSubs );
+
+		//if ( strSearch != "" && m_ListClasses.Count() == 0 )
+			ReportExactClassRejection( matcher.GetSearch(), configs );
+
+	#ifdef DIAG
 		float elapsed = TickCount(ticks) * 0.0001;
 		PrintFormat("UpdateList %1 %2 ms", m_Module.m_SearchText, elapsed);
 	#endif
 
-		m_SearchBox.SetTextPreview(closestMatch);
-	}
-
-	string GetCurrentSelection()
-	{
-		if ( m_ClassList.GetSelectedRow() != -1 )
-		{
-			string result;
-			m_ClassList.GetItemText( m_ClassList.GetSelectedRow(), 0, result );
-			return result;
-		}
-
-		return "";
+		m_SearchBox.SetTextPreview(matcher.GetClosestMatch());
 	}
 }

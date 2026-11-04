@@ -17,7 +17,9 @@
             <input name="UACOTToggleVehicle" loc="STR_COT_INPUT_TOGGLE_MENU_VEHICLE" />
             <input name="UACOTToggleWeather" loc="STR_COT_INPUT_TOGGLE_MENU_WEATHER" />
             <input name="UACOTToggleServerInfo" loc="STR_COT_INPUT_TOGGLE_MENU_SERVER_INFO" />
-            
+            <input name="UACOTToggleCompensations" loc="STR_COT_INPUT_TOGGLE_MENU_COMPENSATIONS" />
+            <input name="UACOTToggleWebhook" loc="STR_COT_INPUT_TOGGLE_MENU_WEBHOOK" />
+
             <input name="UATeleportModuleTeleportCursor" loc="STR_COT_INPUT_TELEPORT_CROSSHAIR" />
             <input name="UATeleportModuleWorldToModelLookAt" loc="STR_COT_INPUT_TELEPORT_WORLD_MODEL_LOOK_AT" visible="false" />
 
@@ -28,6 +30,16 @@
 
             <input name="UACameraToolSpeedIncrease" loc="STR_COT_INPUT_FREECAM_SPEED_INCREASE" />
             <input name="UACameraToolSpeedDecrease" loc="STR_COT_INPUT_FREECAM_SPEED_DECREASE" />
+
+            <input name="UAMapEditorMoveForward"  loc="STR_COT_MAPEDITOR_MOVE_FORWARD"  visible="false" />
+            <input name="UAMapEditorMoveBackward" loc="STR_COT_MAPEDITOR_MOVE_BACKWARD" visible="false" />
+            <input name="UAMapEditorMoveLeft"     loc="STR_COT_MAPEDITOR_MOVE_LEFT"     visible="false" />
+            <input name="UAMapEditorMoveRight"    loc="STR_COT_MAPEDITOR_MOVE_RIGHT"    visible="false" />
+            <input name="UAMapEditorMoveUp"       loc="STR_COT_MAPEDITOR_MOVE_UP"       visible="false" />
+            <input name="UAMapEditorMoveDown"     loc="STR_COT_MAPEDITOR_MOVE_DOWN"     visible="false" />
+            <input name="UAMapEditorBoost"        loc="STR_COT_MAPEDITOR_BOOST"         visible="false" />
+            <input name="UAMapEditorSlow"         loc="STR_COT_MAPEDITOR_SLOW"          visible="false" />
+            <input name="UAMapEditorLook"         loc="STR_COT_MAPEDITOR_LOOK"          visible="false" />
 
             <input name="UAObjectModuleSpawnInfected" loc="STR_COT_INPUT_SPAWN_INFECTED" />
             <input name="UAObjectModuleSpawnAnimal" loc="STR_COT_INPUT_SPAWN_ANIMAL" />
@@ -43,7 +55,7 @@
             <input name="UAPlayerModuleUnlimitedAmmo" loc="STR_COT_PLAYER_MODULE_RIGHT_PLAYER_VARIABLES_UNLIMITED_AMMO" />
             <input name="UAPlayerModuleAdminNV" loc="STR_COT_PLAYER_MODULE_RIGHT_PLAYER_VARIABLES_NVG" />
 
-            <input name="UAPlayerModuleStopSpectating" loc="STR_COT_PLAYER_MODULE_RIGHT_PLAYER_QUICK_ACTIONS_STOP_SPECTATE" />
+            <input name="UAPlayerModuleStopSpectating" loc="STR_COT_PLAYER_MODULE_ACTION_SPECTATE_STOP" />
         </actions>
 
         <sorting name="JM_COT" loc="COT">
@@ -62,6 +74,8 @@
 			<input name="UACOTToggleVehicle" />
 			<input name="UACOTToggleWeather" />
 			<input name="UACOTToggleServerInfo" />
+			<input name="UACOTToggleCompensations" />
+			<input name="UACOTToggleWebhook" />
 
 			<input name="UATeleportModuleTeleportCursor" />
 			<input name="UATeleportModuleWorldToModelLookAt" />
@@ -225,6 +239,47 @@
             <btn name="kRMenu">
                 <btn name="kN" />
             </btn>
+        </input>
+        <input name="UACOTToggleCompensations">
+            <btn name="kRMenu">
+                <btn name="kComma" />
+            </btn>
+        </input>
+        <input name="UACOTToggleWebhook">
+            <btn name="kRMenu">
+                <btn name="kPeriod" />
+            </btn>
+        </input>
+
+        <!-- Map editor 3D freecam — polled each tick by JMFreecam.EOnFrame via
+             GetUApi().GetInputByName(...).LocalHold(). Held combinations give
+             smooth camera flight. Look (mouse-look) is gated by RMB. -->
+        <input name="UAMapEditorMoveForward">
+            <btn name="kW" />
+        </input>
+        <input name="UAMapEditorMoveBackward">
+            <btn name="kS" />
+        </input>
+        <input name="UAMapEditorMoveLeft">
+            <btn name="kA" />
+        </input>
+        <input name="UAMapEditorMoveRight">
+            <btn name="kD" />
+        </input>
+        <input name="UAMapEditorMoveUp">
+            <btn name="kE" />
+        </input>
+        <input name="UAMapEditorMoveDown">
+            <btn name="kQ" />
+        </input>
+        <input name="UAMapEditorBoost">
+            <btn name="kLShift" />
+        </input>
+        <input name="UAMapEditorSlow">
+            <btn name="kLCtrl" />
+        </input>
+        <input name="UAMapEditorLook">
+            <btn name="kRButton" />
         </input>
     </preset>
 </modded_inputs>

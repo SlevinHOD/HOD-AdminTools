@@ -1,0 +1,528 @@
+//  JMBanModule.c - standalone ban management module. OnUpdate runs the prune
+//  sweep; EnableUpdate() is emptied to disable client-side ticking. Ban-on-connect
+//  needs no hook here: JMPlayerBan.Save() writes a per-player file that COT's
+//  mission connect code already checks.
+
+class JMBanModule : JMRenderableModuleBase
+{
+    static const string BAN_DIR  = "$profile:CommunityOnlineTools\\Bans\\";
+    static const string BAN_FILE = "$profile:CommunityOnlineTools\\Bans\\Bans.json";
+    static const float PRUNE_INTERVAL = 60.0;
+    protected ref JMPlayerBanStore             m_Store;
+    protected ref map<string, ref JMPlayerBan> m_ActiveIndex;
+    protected float                            m_PruneTimer;
+
+    // -------------------------------------------------------------------------
+    //  Store queries
+    // -------------------------------------------------------------------------
+
+    JMPlayerBan GetActiveBan( string steamID )
+    {
+        if ( !m_ActiveIndex )
+            return NULL;
+        return m_ActiveIndex.Get( steamID );
+    }
+
+    bool IsBanned( string steamID )
+    {
+        return m_ActiveIndex && m_ActiveIndex.Contains( steamID );
+    }
+
+    // -------------------------------------------------------------------------
+    //  Permissions
+    // -------------------------------------------------------------------------
+
+	override void DescribeModule( JMModuleInfo info )
+	{
+		super.DescribeModule( info );
+
+		info.Title = "Ban Management";
+		info.WebhookTitle = "Ban Management Module";
+		info.Icon = "gavel";
+		info.Layout = "JM/COT/GUI/layouts/ban_form.layout";
+		info.Category = JMSideBarConfig.CATEGORY_PLAYERS;
+		info.ViewPermission = JMConstants.PERM_BAN_VIEW;
+		info.SetRPCRange( JMBanModuleRPC.INVALID, JMBanModuleRPC.COUNT );
+
+		info.AddPermission( JMConstants.PERM_BAN_UNBAN );
+
+		info.AddWebhookType( "Ban" );
+		info.AddWebhookType( "Unban" );
+		info.AddWebhookType( "EditBan" );
+	}
+
+    // -------------------------------------------------------------------------
+    //  JMRenderableModuleBase overrides
+    // -------------------------------------------------------------------------
+
+    // -------------------------------------------------------------------------
+    //  RPC range
+    // -------------------------------------------------------------------------
+
+    // -------------------------------------------------------------------------
+    //  Update - only needed server-side for expiry pruning.
+    //  Override EnableUpdate empty on client (matching JMESPModule #ifdef SERVER)
+    // -------------------------------------------------------------------------
+
+#ifndef SERVER
+    override void EnableUpdate()
+    {
+    }
+#endif
+
+    // -------------------------------------------------------------------------
+    //  OnMissionLoaded - load ban store on server (matching JMLoadoutModule)
+    // -------------------------------------------------------------------------
+
+    override void OnMissionStart()
+    {
+        super.OnMissionStart();
+
+        m_Store       = new JMPlayerBanStore();
+        m_ActiveIndex = new map<string, ref JMPlayerBan>();
+        m_PruneTimer  = 0;
+
+        if ( g_Game.IsServer() )
+            Load();
+    }
+
+    // -------------------------------------------------------------------------
+    //  OnUpdate - sweep expired timed bans (matching JMESPModule signature)
+    // -------------------------------------------------------------------------
+
+    override void OnUpdate( float timeslice )
+    {
+        super.OnUpdate( timeslice );
+
+        if ( !g_Game.IsServer() )
+            return;
+
+        m_PruneTimer += timeslice;
+        if ( m_PruneTimer < PRUNE_INTERVAL )
+            return;
+
+        m_PruneTimer = 0;
+        PruneExpired();
+    }
+
+    // -------------------------------------------------------------------------
+    //  OnRPC - single override with internal switch (matching JMPlayerModule)
+    // -------------------------------------------------------------------------
+
+    override void OnRPC( PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx )
+    {
+        switch ( rpc_type )
+        {
+        case JMBanModuleRPC.RequestBanList:
+            RPC_RequestBanList( ctx, sender, target );
+            break;
+        case JMBanModuleRPC.RequestBan:
+            RPC_RequestBan( ctx, sender, target );
+            break;
+        case JMBanModuleRPC.UnbanPlayer:
+            RPC_UnbanPlayer( ctx, sender, target );
+            break;
+        case JMBanModuleRPC.EditBanDuration:
+            RPC_EditBanDuration( ctx, sender, target );
+            break;
+        case JMBanModuleRPC.BanList:
+            RPC_BanList( ctx, sender, target );
+            break;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    //  Public API - called by JMBanForm
+    // -------------------------------------------------------------------------
+
+    // Issue a ban for an online or offline player.
+    // durationSeconds: -1 = permanent, else relative seconds from now.
+    void Ban( string steamID, string playerName, string message, int durationSeconds, string issuedBy, string issuedByName )
+    {
+        if ( IsMissionHost() )
+        {
+            Exec_Ban( steamID, playerName, message, durationSeconds, issuedBy, issuedByName, NULL );
+        }
+        else
+        {
+            ScriptRPC rpc = new ScriptRPC();
+            rpc.Write( steamID         );
+            rpc.Write( playerName      );
+            rpc.Write( message         );
+            rpc.Write( durationSeconds );
+            rpc.Send( NULL, JMBanModuleRPC.RequestBan, true, NULL );
+        }
+    }
+
+    // Ask the server to send the active ban list to this client.
+    override void RequestData()
+    {
+        RequestBanList();
+    }
+
+    void RequestBanList()
+    {
+        ScriptRPC rpc = new ScriptRPC();
+        rpc.Send( NULL, JMBanModuleRPC.RequestBanList, true, NULL );
+    }
+
+    // Lift an active ban, same host-direct/RPC split as Ban()/EditBanDuration().
+    void Unban( string steamID )
+    {
+        if ( IsMissionHost() )
+        {
+            Exec_UnbanPlayer( steamID, NULL );
+        }
+        else
+        {
+            ScriptRPC rpc = new ScriptRPC();
+            rpc.Write( steamID );
+            rpc.Send( NULL, JMBanModuleRPC.UnbanPlayer, true, NULL );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    //  Server: execute a ban
+    // -------------------------------------------------------------------------
+
+    //! The permissions instance of the admin behind an identity, NULL for the mission host.
+    protected JMPlayerInstance GetAdminInstance( PlayerIdentity adminIdent )
+    {
+        if ( !adminIdent )
+            return NULL;
+
+        return GetPermissionsManager().GetPlayer( adminIdent.GetId() );
+    }
+
+    protected void Exec_Ban( string steamID, string playerName, string message, int durationSeconds, string issuedBy, string issuedByName, PlayerIdentity adminIdent )
+    {
+        JMPlayerBan ban = new JMPlayerBan();
+        ban.SteamID       = steamID;
+        ban.PlayerName    = playerName;
+        ban.Message       = message;
+        ban.IssuedBy      = issuedBy;
+        ban.IssuedByName  = issuedByName;
+
+        CF_Date now = CF_Date.Now( true );
+        ban.BannedAt = now.GetTimestamp();
+        if ( durationSeconds == -1 )
+            ban.BanDuration = -1;
+        else
+            ban.BanDuration = now.GetTimestamp() + durationSeconds;
+
+        m_Store.Bans.Insert( ban );
+        if ( ban.IsActive() )
+            m_ActiveIndex.Set( steamID, ban );
+
+        Save();
+
+        GetCommunityOnlineToolsBase().Log( adminIdent, "Banned [steamID=" + steamID + "] | " + message );
+        SendWebhook( "Ban", GetAdminInstance( adminIdent ), "Banned " + playerName + " (" + steamID + ") | " + message );
+    }
+
+    // -------------------------------------------------------------------------
+    //  Server RPC: RequestBanList
+    // -------------------------------------------------------------------------
+
+    protected void RPC_RequestBanList( ParamsReadContext ctx, PlayerIdentity sender, Object target )
+    {
+        if ( !IsMissionHost() )
+            return;
+
+        if ( !sender ) return;
+        if ( !JMPermissions.HasRPC( JMConstants.PERM_BAN_VIEW, sender ) )
+            return;
+
+        PruneExpired();
+
+        ScriptRPC rpc = new ScriptRPC();
+        rpc.Write( m_ActiveIndex.Count() );
+
+        foreach ( string id, JMPlayerBan ban : m_ActiveIndex )
+        {
+            rpc.Write( ban.SteamID      );
+            rpc.Write( ban.PlayerName   );
+            rpc.Write( ban.Message      );
+            rpc.Write( ban.BannedAt     );
+            rpc.Write( ban.BanDuration  );
+            rpc.Write( ban.IssuedByName );
+        }
+
+        // Append known player list (all ever-connected players) for "Ban Offline" dropdown
+        array< JMPlayerInstance > knownPlayers = GetPermissionsManager().GetPlayers();
+        rpc.Write( knownPlayers.Count() );
+        foreach ( JMPlayerInstance pi : knownPlayers )
+        {
+            rpc.Write( pi.GetGUID() );
+            rpc.Write( pi.GetName() );
+        }
+
+        rpc.Send( NULL, JMBanModuleRPC.BanList, true, sender );
+    }
+
+    // -------------------------------------------------------------------------
+    //  Server RPC: RequestBan - client asks server to ban a player
+    // -------------------------------------------------------------------------
+
+    protected void RPC_RequestBan( ParamsReadContext ctx, PlayerIdentity sender, Object target )
+    {
+        if ( !IsMissionHost() )
+            return;
+
+        //! Banning is gated on Admin.Player.Ban (as in the Player module and ESP
+        //! menu), NOT Admin.Ban.View: View only grants sight of the list, so a
+        //! read-only role must not be able to ban through this panel.
+        JMPlayerInstance instance;
+        if ( !sender ) return;
+        if ( !JMPermissions.HasRPC( JMConstants.PERM_PLAYER_BAN, sender, instance ) )
+            return;
+
+        string steamID;
+        string playerName;
+        string message;
+        int    durationSeconds;
+
+        if ( !ctx.Read( steamID )         ) return;
+        if ( !ctx.Read( playerName )      ) return;
+        if ( !ctx.Read( message )         ) return;
+        if ( !ctx.Read( durationSeconds ) ) return;
+
+        if ( steamID == "" || message == "" )
+            return;
+
+        Exec_Ban( steamID, playerName, message, durationSeconds, sender.GetId(), sender.GetName(), sender );
+
+        // Refresh requester's panel
+        RPC_RequestBanList( ctx, sender, target );
+    }
+
+    // -------------------------------------------------------------------------
+    //  Server RPC: UnbanPlayer
+    // -------------------------------------------------------------------------
+
+    protected void RPC_UnbanPlayer( ParamsReadContext ctx, PlayerIdentity sender, Object target )
+    {
+        if ( !IsMissionHost() )
+            return;
+
+        JMPlayerInstance instance;
+        if ( !sender ) return;
+        if ( !JMPermissions.HasRPC( JMConstants.PERM_BAN_UNBAN, sender, instance ) )
+            return;
+
+        string steamID;
+        if ( !ctx.Read( steamID ) || steamID == "" )
+            return;
+
+        if ( !Exec_UnbanPlayer( steamID, sender ) )
+            return;
+
+        // Refresh the admin's panel
+        RPC_RequestBanList( ctx, sender, target );
+    }
+
+    //! Shared by RPC_UnbanPlayer (client-triggered) and Unban() (host-direct);
+    //! adminIdent is NULL when the mission host itself performs the unban, so
+    //! every notify/log/webhook call below has to tolerate that.
+    protected bool Exec_UnbanPlayer( string steamID, PlayerIdentity adminIdent )
+    {
+        if ( !m_ActiveIndex.Contains( steamID ) )
+        {
+            if ( adminIdent )
+                COTCreateNotification( adminIdent, new StringLocaliser( "No active ban found for: " + steamID ) );
+            return false;
+        }
+
+        JMPlayerBan ban = m_ActiveIndex.Get( steamID );
+        if ( ban )
+            ban.BanDuration = 0;   // zero = intentionally lifted; record stays for audit
+
+        m_ActiveIndex.Remove( steamID );
+        Save();
+
+        string issuedByName = "Host";
+        if ( adminIdent )
+            issuedByName = adminIdent.GetName();
+
+        GetCommunityOnlineToolsBase().Log( adminIdent, "Unbanned [steamID=" + steamID + "]" );
+        SendWebhook( "Unban", GetAdminInstance( adminIdent ), issuedByName + " unbanned SteamID: " + steamID );
+
+        if ( adminIdent )
+            COTCreateNotification( adminIdent, new StringLocaliser( "Unbanned SteamID: " + steamID ) );
+
+        return true;
+    }
+
+    // -------------------------------------------------------------------------
+    //  Public API: edit duration of an existing ban
+    //  durationSeconds: -1 = permanent, else relative seconds from now
+    // -------------------------------------------------------------------------
+
+    void EditBanDuration( string steamID, int durationSeconds )
+    {
+        if ( IsMissionHost() )
+        {
+            Exec_EditBanDuration( steamID, durationSeconds, NULL );
+        }
+        else
+        {
+            ScriptRPC rpc = new ScriptRPC();
+            rpc.Write( steamID         );
+            rpc.Write( durationSeconds );
+            rpc.Send( NULL, JMBanModuleRPC.EditBanDuration, true, NULL );
+        }
+    }
+
+    protected void Exec_EditBanDuration( string steamID, int durationSeconds, PlayerIdentity adminIdent )
+    {
+        JMPlayerBan ban = m_ActiveIndex.Get( steamID );
+        if ( !ban )
+        {
+            if ( adminIdent )
+                COTCreateNotification( adminIdent, new StringLocaliser( "No active ban found for: " + steamID ) );
+            return;
+        }
+
+        //! BanDuration is the expiry timestamp (-1 permanent), so "from" is what was left of it.
+        string durationFrom = "permanent";
+        if ( ban.BanDuration != -1 )
+        {
+            CF_Date nowBefore = CF_Date.Now( true );
+            durationFrom = Math.Max( 0, ban.BanDuration - nowBefore.GetTimestamp() ).ToString() + "s remaining";
+        }
+
+        string durationTo = "permanent";
+
+        if ( durationSeconds == -1 )
+        {
+            ban.BanDuration = -1;
+        }
+        else
+        {
+            CF_Date now = CF_Date.Now( true );
+            ban.BanDuration = now.GetTimestamp() + durationSeconds;
+            durationTo = durationSeconds.ToString() + "s";
+        }
+
+        Save();
+
+        GetCommunityOnlineToolsBase().Log( adminIdent, "Edited ban duration [steamID=" + steamID + "] -> " + durationSeconds );
+        SendWebhook( "EditBan", GetAdminInstance( adminIdent ), "Edited ban duration for SteamID: " + steamID + " from **" + durationFrom + "** to **" + durationTo + "**" );
+    }
+
+    protected void RPC_EditBanDuration( ParamsReadContext ctx, PlayerIdentity sender, Object target )
+    {
+        if ( !IsMissionHost() )
+            return;
+
+        JMPlayerInstance instance;
+        if ( !sender ) return;
+        if ( !JMPermissions.HasRPC( JMConstants.PERM_BAN_UNBAN, sender, instance ) )
+            return;
+
+        string steamID;
+        int    durationSeconds;
+
+        if ( !ctx.Read( steamID )         ) return;
+        if ( !ctx.Read( durationSeconds ) ) return;
+
+        if ( steamID == "" )
+            return;
+
+        Exec_EditBanDuration( steamID, durationSeconds, sender );
+
+        RPC_RequestBanList( ctx, sender, target );
+    }
+
+    // -------------------------------------------------------------------------
+    //  Client RPC: receive ban list, push to open form (matching JMESPModule pattern)
+    // -------------------------------------------------------------------------
+
+    protected void RPC_BanList( ParamsReadContext ctx, PlayerIdentity sender, Object target )
+    {
+        if ( IsMissionHost() )
+            return;
+
+        int count;
+        if ( !ctx.Read( count ) )
+            return;
+
+        array<ref JMPlayerBan> bans = new array<ref JMPlayerBan>();
+
+        for ( int i = 0; i < count; i++ )
+        {
+            JMPlayerBan ban = new JMPlayerBan();
+            if ( !ctx.Read( ban.SteamID ) || !ctx.Read( ban.PlayerName ) || !ctx.Read( ban.Message ) || !ctx.Read( ban.BannedAt ) || !ctx.Read( ban.BanDuration ) || !ctx.Read( ban.IssuedByName ) )
+                break;
+
+            bans.Insert( ban );
+        }
+
+        // Read known player list for "Ban Offline" dropdown
+        array<string> playerGuids = new array<string>();
+        array<string> playerNames = new array<string>();
+        int playerCount;
+        if ( ctx.Read( playerCount ) )
+        {
+            for ( int j = 0; j < playerCount; j++ )
+            {
+                string guid, name;
+                if ( !ctx.Read( guid ) || !ctx.Read( name ) )
+                    break;
+                playerGuids.Insert( guid );
+                playerNames.Insert( name );
+            }
+        }
+
+        // Push to the open form - GetForm() pattern confirmed from JMESPModule
+        JMBanForm form;
+        if ( Class.CastTo( form, GetForm() ) )
+            form.PopulateBanList( bans, playerGuids, playerNames );
+    }
+
+    // -------------------------------------------------------------------------
+    //  Persistence - JMJsonFile<JMPlayerBanStore>
+    // -------------------------------------------------------------------------
+
+    protected void Load()
+    {
+        m_Store = new JMPlayerBanStore();
+        m_ActiveIndex.Clear();
+
+        if ( !FileExist( BAN_FILE ) )
+            return;
+
+        if ( !JMJsonFile<JMPlayerBanStore>.Load( BAN_FILE, m_Store ) )
+        {
+            m_Store = new JMPlayerBanStore();
+            return;
+        }
+
+        foreach ( JMPlayerBan ban : m_Store.Bans )
+        {
+            if ( ban && ban.SteamID != "" && ban.IsActive() )
+                m_ActiveIndex.Set( ban.SteamID, ban );
+        }
+
+        Print( "[COT/BanModule] Loaded " + m_Store.Bans.Count() + " records, " + m_ActiveIndex.Count() + " active." );
+    }
+
+    protected void Save()
+    {
+        JMJsonFile<JMPlayerBanStore>.Save( BAN_FILE, m_Store );
+    }
+
+    protected void PruneExpired()
+    {
+        array<string> toRemove = new array<string>();
+
+        foreach ( string id, JMPlayerBan ban : m_ActiveIndex )
+        {
+            if ( !ban.IsActive() )
+                toRemove.Insert( id );
+        }
+
+        foreach ( string removeID : toRemove )
+            m_ActiveIndex.Remove( removeID );
+    }
+}

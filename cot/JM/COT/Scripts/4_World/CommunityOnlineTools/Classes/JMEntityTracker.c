@@ -1,0 +1,129 @@
+class JMEntityTracker
+{
+	static int m_EntityCount = 0;
+
+	// Store entities by classname for fast lookup
+	static ref map<string, ref set<EntityAI>> m_EntitiesByType = new map<string, ref set<EntityAI>>;
+
+	static void GetAllClassnames(out array<string> outClassnames)
+	{
+		if (!outClassnames)
+			outClassnames = new array<string>;
+		else
+			outClassnames.Clear();
+
+		foreach (string className, set<EntityAI> entities: m_EntitiesByType)
+		{
+			outClassnames.Insert(className);
+		}
+	}
+
+	static void GetByClassname(string className, out set<EntityAI> outItems, bool clearExistingArray = true)
+	{
+		if (!outItems)
+		{
+			outItems = new set<EntityAI>;
+		}
+		else if (clearExistingArray)
+		{
+			outItems.Clear();
+		}
+
+		if (className == "")
+			return;
+
+		set<EntityAI> bucket;
+		if (m_EntitiesByType.Find(className, bucket))
+		{
+			outItems.Copy(bucket);
+		}
+	}
+
+	static int GetClassnameCount(string className)
+	{
+		set<EntityAI> bucket;
+		if (m_EntitiesByType.Find(className, bucket))
+			return bucket.Count();
+		return 0;
+	}
+
+	static int GetTotalEntityCount()
+	{
+		return m_EntityCount;
+	}
+
+	static void Register(EntityAI item)
+	{
+		if (!item)
+			return;
+
+		string t = item.GetType();
+
+		set<EntityAI> bucket;
+		if (!m_EntitiesByType.Find(t, bucket))
+		{
+			bucket = new set<EntityAI>;
+			m_EntitiesByType.Insert(t, bucket);
+		}
+
+		//! EEInit can fire more than once for the same entity (e.g. on
+		//! re-init after storage load), so guard against double-counting.
+		if (bucket.Find(item) > -1)
+			return;
+
+		bucket.Insert(item);
+		m_EntityCount++;
+	}
+
+	static void Unregister(EntityAI item)
+	{
+		if (!item)
+			return;
+
+		string t = item.GetType();
+		set<EntityAI> bucket;
+
+		if (!m_EntitiesByType.Find(t, bucket))
+			return;
+
+		int idx = bucket.Find(item);
+
+		//! Only decrement when the entity was actually in the bucket.
+		//! Decrementing unconditionally drifts m_EntityCount permanently
+		//! negative on any unregister of an untracked entity.
+		if (idx == -1)
+			return;
+
+		bucket.Remove(idx);
+		m_EntityCount--;
+
+		if (bucket.Count() == 0)
+			m_EntitiesByType.Remove(t);
+	}
+
+	static int DeleteAllEntities(string className)
+	{
+		int deleteCount = 0;
+
+		//! GetByClassname copies into tempArray, so this iterates a snapshot --
+		//! DeleteSafe -> EEDelete -> Unregister mutates the live bucket
+		//! underneath us, which would invalidate a direct iteration.
+		set<EntityAI> tempArray;
+		GetByClassname(className, tempArray);
+
+		foreach (EntityAI entity : tempArray)
+		{
+			if (!entity)
+				continue;
+
+			//! Already queued for deletion by something else this frame.
+			if (entity.IsSetForDeletion())
+				continue;
+
+			entity.DeleteSafe();
+			deleteCount++;
+		}
+
+		return deleteCount;
+	}
+}

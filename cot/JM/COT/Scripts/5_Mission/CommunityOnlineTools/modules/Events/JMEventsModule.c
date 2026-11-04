@@ -1,0 +1,30 @@
+// JMEventsModule: admin UI over dynamic + static world events (heli crashes, contaminated
+// zones, airdrops, a few static map objects). Delegates everything to JMEventsAdapter.
+class JMEventsModule: JMEntityManagerModule
+{
+	// Temporarily hidden from the sidebar.
+	override bool HasButton() { return false; }
+
+	override JMEntityManagerAdapter CreateAdapter()
+	{
+		return new JMEventsAdapter();
+	}
+
+	override int GetRPCRequest()    { return JMEventsModuleRPC.Request;     }
+	override int GetRPCSend()       { return JMEventsModuleRPC.Send;        }
+	override int GetRPCAction()     { return JMEventsModuleRPC.Action;      }
+	override int GetRPCSendUpsert() { return JMEventsModuleRPC.SendUpsert;  }
+	override int GetRPCSendRemove() { return JMEventsModuleRPC.SendRemove;  }
+
+	override string GetWebhookTitle()
+	{
+		return "Events Module";
+	}
+
+	override void GetWebhookTypes( out array<string> types )
+	{
+		types.Insert( "Teleport" );
+		types.Insert( "Delete"   );
+		types.Insert( "Spawn"    );
+	}
+}

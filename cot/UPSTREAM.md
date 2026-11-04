@@ -1,9 +1,9 @@
 # Upstream: Community Online Tools
 
 - Source: https://github.com/Jacob-Mango/DayZ-CommunityOnlineTools
-- Imported commit: 85d7f4d (production, 2026-07-15)
+- Imported commit: 364216ad (dev/1.30 - the branch Workshop COT ships, 2026-11-01)
 - License: CC BY-SA 4.0 (see LICENSE.COT). Authors: Jacob_Mango, DannyDog, Arkensor, LiquidRock, LieutenantMaster and contributors.
-- Excluded on import: JM/COT/Workbench (Windows build scripts).
+- Excluded on import: Workbench, AutoTest, ExampleScriptOverride, docs, AI notes, build.ps1.
 
 Internal class names, the `JM_COT` define and CfgPatches names are kept unchanged on purpose:
 DayZ Expansion's COT integration (55 files under `#ifdef JM_COT`) depends on them.

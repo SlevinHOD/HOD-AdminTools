@@ -2,13 +2,11 @@ class JMTeleportSerialize : Managed
 {
 	ref TStringArray Types;
 	ref array< ref JMTeleportLocation > Locations;
-
 	[NonSerialized()]
 	string m_WorldName;
-
 	static string m_FileName;
 
-	private void JMTeleportSerialize()
+	protected void JMTeleportSerialize()
 	{
 	 	Types = new TStringArray;
 		Locations = new array< ref JMTeleportLocation >;
@@ -20,10 +18,8 @@ class JMTeleportSerialize : Managed
 	{
 		JMTeleportSerialize settings = new JMTeleportSerialize();
 
-		if ( FileExist( m_FileName ) )
+		if ( JMJsonFile<JMTeleportSerialize>.Load( m_FileName, settings ) )
 		{
-			JsonFileLoader<JMTeleportSerialize>.JsonLoadFile( m_FileName, settings );
-			
 			//! we dont have versionning so this is a fail safe
 			if ( settings.Types.Count() == 0 )
 			{
@@ -50,7 +46,7 @@ class JMTeleportSerialize : Managed
 
 	void Save()
 	{
-		JsonFileLoader<JMTeleportSerialize>.JsonSaveFile( m_FileName, this );
+		JMJsonFile<JMTeleportSerialize>.Save( m_FileName, this );
 	}
 
 	void AddLocation( string type, string name, vector position, float radius = 4.0 )
@@ -119,8 +115,8 @@ class JMTeleportSerialize : Managed
 		Types.Sort();
 		Types.InsertAt("ALL", 0);
 	
-		ref array< ref string > afterSorting = new array< ref string >;
-		ref array< ref string > beforeSorting = new array< ref string >;
+		array< ref string > afterSorting = new array< ref string >;
+		array< ref string > beforeSorting = new array< ref string >;
 
 		int loc_count = Locations.Count();
 		
@@ -132,7 +128,7 @@ class JMTeleportSerialize : Managed
 
 		afterSorting.Sort();
 
-		ref array< ref JMTeleportLocation > tmp_locations = new array< ref JMTeleportLocation >;
+		array< ref JMTeleportLocation > tmp_locations = new array< ref JMTeleportLocation >;
 		
 		for ( int j = 0; j < loc_count; ++j ) 
 		{

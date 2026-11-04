@@ -1,0 +1,269 @@
+//! One tracked object: what the ESP knows about it and how to reach it. Every
+//! action lives in JMESPActionMenu (right-click the world tag or the ESP row):
+//! one place to add an action and one set of permission checks, with no widget
+//! tree per visible object.
+class JMESPMeta: COT_WidgetHolder
+{
+#ifdef DIAG
+	static int s_JMESPMetaCount;
+#endif
+
+	static ref CF_DoublyLinkedNodes_WeakRef<JMESPMeta> s_JM_All = new CF_DoublyLinkedNodes_WeakRef<JMESPMeta>();
+	ref CF_DoublyLinkedNode_WeakRef<JMESPMeta> s_JM_Node;
+	string name;
+	string targetType;
+	JMESPViewType type;
+	int colour;
+	JMPlayerInstance player;
+	Object target;
+	int networkLow;
+	int networkHigh;
+	JMESPModule module;
+	JMESPWidgetHandler widgetHandler;
+	Widget widgetRoot;
+	bool m_TargetDeleted;
+	JMESPTransformPopup m_TransformPopup;
+	string m_Key;  //! set if not actively tracked by ESP but created for (e.g.) world actions menu
+
+	int m_Component = -1;
+
+	//! Which Building door the right-click landed on, from the raycast
+	//! component the menu was opened with. -1 when the target isn't a
+	//! Building or the click wasn't on any of its doors.
+	int m_DoorIndex = -1;
+
+	//! Backing store for GetConstructionParts, kept so the menu reads one map
+	//! instead of allocating a fresh one each time it is rebuilt.
+	protected ref map< string, ref JMConstructionPartData > m_ConstructionParts;
+
+	void JMESPMeta()
+	{
+		s_JM_Node = s_JM_All.Add(this);
+
+	#ifdef DIAG
+		s_JMESPMetaCount++;
+	#endif
+	}
+
+	void ~JMESPMeta()
+	{
+		if (!g_Game)
+			return;
+
+		#ifdef JM_COT_ESP_DEBUG
+		auto trace = CF_Trace_0(this);
+		Print( "  widgetHandler = " + widgetHandler );
+		#endif
+
+		JMScriptInvokers.ESP_WIDGET_DESTROYED.Invoke( this );
+
+		m_TransformPopup = null;
+
+		if ( m_Key && module )
+		{
+		#ifdef DIAG_DEVELOPER
+			Print("~JMESPMeta() " + m_Key);
+		#endif
+			module.RemoveMetaForObject( m_Key );
+		}
+
+		DestroyWidget(widgetRoot);
+
+		if (s_JM_All)
+			s_JM_All.Remove(s_JM_Node);
+
+	#ifdef DIAG
+		s_JMESPMetaCount--;
+		if (s_JMESPMetaCount <= 0)
+			CF_Log.Info("JMESPMeta count: " + s_JMESPMetaCount);
+	#endif
+	}
+
+	void Setup( Object obj, JMESPViewType viewType )
+	{
+		SetTarget( obj );
+
+		colour = viewType.Colour;
+		type = viewType;
+	}
+
+	void SetTarget( Object obj )
+	{
+		target = obj;
+
+		obj.GetNetworkID( networkLow, networkHigh );
+
+		name = GetName();
+		targetType = GetType();
+	}
+
+	//! Construction parts, for objects that have any (NULL elsewhere, which keeps
+	//! the base building page out of a rock's menu). Anything with a construction
+	//! component answers, e.g. rebuildable map buildings and wells.
+	map< string, ref JMConstructionPartData > GetConstructionParts()
+	{
+		ConstructionBase construction = JMESPModule.GetConstructionOf( target );
+
+		if ( !construction )
+			return NULL;
+
+		if ( !m_ConstructionParts )
+			m_ConstructionParts = new map< string, ref JMConstructionPartData >;
+
+		construction.COT_GetParts( m_ConstructionParts, false );
+
+		return m_ConstructionParts;
+	}
+
+	string GetName()
+	{
+		string displayName = target.GetDisplayName();
+
+		if (displayName == "")
+			displayName = GetType();
+
+		return displayName;
+	}
+
+	static string GetObjectType(Object obj)
+	{
+		string objType = obj.GetType();
+
+		if (objType == "")
+		{
+			string debugName = obj.GetDebugName();
+			int i = debugName.IndexOf(":");
+
+			if (i > -1)
+				objType = debugName.Substring(i + 1, debugName.Length() - i - 1).Trim();
+			else if (obj.IsScenery())
+				objType = "TERRAIN";
+			else
+				objType = debugName;
+		}
+
+		return objType;
+	}
+
+	string GetType()
+	{
+		return GetObjectType(target);
+	}
+
+	string GetLabel()
+	{
+		string label;
+
+		if ( !JMESPWidgetHandler.UseClassName || ( type && type.IsInherited( JMESPViewTypePlayer ) ) )
+			label = name;
+		else
+			label = targetType;
+
+		return label;
+	}
+
+	bool IsValid()
+	{
+		#ifdef JM_COT_ESP_DEBUG
+		Print( "+JMESPMeta::IsValid() bool;" );
+		Print( "  target = " + Object.GetDebugName( target ) );
+		#endif
+
+		if ( target == NULL )
+			return false;
+
+		if ( !(type.HasPermission && type.View) )
+			return false;
+
+		JMESPMeta meta = this;
+		return type.IsValid( target, meta );
+	}
+
+	void Create( JMESPModule mod )
+	{
+		module = mod;
+
+		if ( widgetRoot )
+			return;
+
+		//! @note don't try to be cute and re-use widget handler from a pool, it won't work and will segfault the game
+
+		if ( !Class.CastTo( widgetRoot, g_Game.GetWorkspace().CreateWidgets( "JM/COT/GUI/layouts/esp_widget.layout", JMStatics.ESP_CONTAINER ) ) )
+			return;
+
+		widgetRoot.GetScript( widgetHandler );
+		if ( !widgetHandler )
+			return;
+
+		widgetHandler.SetInfo( this );
+	}
+
+	bool CanDelete()
+	{
+		return true;
+	}
+
+	//! DEPRECATED. Kept so third party mods written against the old action panel
+	//! still compile (Expansion overrides it on four meta types). Nothing calls it:
+	//! actions live in JMESPActionMenu, which has no `parent` widget, so the
+	//! overrides are inert, not broken.
+	void CreateActions( Widget parent )
+	{
+	}
+}
+
+
+class JMESPMetaPlayer : JMESPMeta
+{
+	override bool CanDelete()
+	{
+		return !target.IsAlive();
+	}
+}
+
+
+class JMESPMetaBaseBuilding : JMESPMeta
+{
+	ref map< string, ref JMConstructionPartData > m_Parts;
+
+	//! DEPRECATED, see JMESPMeta::CreateActions. These stay allocated and empty
+	//! so Expansion's UpdateButtonStates override - which indexes all four in
+	//! lockstep off m_StateHeaders.Count() - iterates zero times instead of
+	//! dereferencing NULL.
+	ref array< UIActionText > m_StateHeaders;
+	ref array< UIActionButton > m_BuildButtons;
+	ref array< UIActionButton > m_DismantleButtons;
+	ref array< UIActionButton > m_RepairButtons;
+	BaseBuildingBase m_BaseBuilding;
+
+	void JMESPMetaBaseBuilding()
+	{
+		m_Parts = new map< string, ref JMConstructionPartData >;
+
+		m_StateHeaders = new array< UIActionText >;
+		m_BuildButtons = new array< UIActionButton >;
+		m_DismantleButtons = new array< UIActionButton >;
+		m_RepairButtons = new array< UIActionButton >;
+	}
+
+	//! DEPRECATED, see JMESPMeta::CreateActions. Expansion overrides this to
+	//! hide the rows for parts it does not want offered; the menu decides that
+	//! for itself now in JMESPActionMenu::BuildConstruction.
+	protected void UpdateButtonStates()
+	{
+	}
+}
+
+//! Kept as the meta types the view types name, even though the actions they
+//! used to carry now come from the menu's own type tests.
+class JMESPMetaCar : JMESPMeta
+{
+}
+
+class JMESPMetaBoat : JMESPMeta
+{
+}
+
+class JMESPMetaTrain : JMESPMeta
+{
+}

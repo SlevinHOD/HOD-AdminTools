@@ -1,0 +1,301 @@
+//  UIActionTooltip: global hover tooltip with text, optional icon / color swatch.
+//  Create once per form: UIActionManager.CreateTooltip( layoutRoot );
+//  then btn.SetTooltip( "Warning", JMConstants.ICON_ALERT, 0xFFFF4444 );
+
+class UIActionTooltip: COT_ScriptedWidgetEventHandler
+{
+	// Strong ref so lazy-init callers (SetTooltip, JMFormBase hook) don't have
+	// to hang onto the returned handle themselves. Without this the instance
+	// gets GC'd the moment CreateTooltip() returns and tooltips die everywhere.
+	static ref UIActionTooltip s_InstanceRef;
+	static UIActionTooltip s_Instance;
+	protected Widget          m_Root;
+	protected RichTextWidget  m_Text;
+	protected Widget          m_TextContainer;
+	protected ImageWidget     m_Icon;
+	protected Widget          m_Swatch;
+	protected bool m_Visible;
+	protected float m_TooltipW;
+
+	// Pending show request - tooltip appears after HOVER_DELAY_S of continuous hover.
+	protected bool   m_Pending;
+	protected float  m_PendingTimer;
+	protected string m_PendingText;
+	protected string m_PendingIcon;
+	protected int    m_PendingSwatch;
+	protected int    m_PendingTextColor;
+	// The widget that triggered the current (or pending) tooltip - used to auto-hide
+	// when the source widget's form is hidden.
+	protected Widget m_SourceWidget;
+	static const float HOVER_DELAY_S = 1.0;
+
+	void UIActionTooltip( notnull Widget anchor )
+	{
+		m_Root = g_Game.GetWorkspace().CreateWidgets( "JM/COT/GUI/layouts/uiactions/UIActionTooltip.layout", anchor );
+
+		if ( m_Root )
+		{
+			Class.CastTo( m_Text,          m_Root.FindAnyWidget( "tooltip_text"           ) );
+			Class.CastTo( m_TextContainer, m_Root.FindAnyWidget( "tooltip_text_container" ) );
+			Class.CastTo( m_Icon,          m_Root.FindAnyWidget( "tooltip_icon"           ) );
+			Class.CastTo( m_Swatch,        m_Root.FindAnyWidget( "tooltip_swatch"         ) );
+			m_Root.Show( false );
+		}
+
+		if ( s_InstanceRef && s_InstanceRef != this )
+			s_InstanceRef.m_Root = null;
+
+		s_Instance    = this;
+		s_InstanceRef = this;
+
+		g_Game.GetUpdateQueue( CALL_CATEGORY_GUI ).Insert( Update );
+	}
+
+	void ~UIActionTooltip()
+	{
+		if (!g_Game)
+			return;
+
+		g_Game.GetUpdateQueue( CALL_CATEGORY_GUI ).Remove( Update );
+
+		if ( s_Instance == this )
+		{
+			s_Instance    = null;
+			s_InstanceRef = null;
+		}
+
+		DestroyWidget(m_Root);
+	}
+
+	static void Show( string text, string iconPath = "", int swatchColor = 0, int textColor = 0, Widget sourceWidget = null )
+	{
+		if ( !s_Instance )
+			return;
+
+		s_Instance.QueueShow( text, iconPath, swatchColor, textColor, sourceWidget );
+	}
+
+	static void Hide()
+	{
+		if ( !s_Instance )
+			return;
+
+		s_Instance.HideInternal();
+	}
+
+	void QueueShow( string text, string iconPath, int swatchColor, int textColor, Widget sourceWidget )
+	{
+		// Store the deadline in game-time ms. Update() fires ShowInternal once
+		// the mouse has hovered continuously for HOVER_DELAY_S.
+		m_Pending          = true;
+		m_PendingTimer     = g_Game.GetTime() + HOVER_DELAY_S * 1000.0;
+		m_PendingText      = text;
+		m_PendingIcon      = iconPath;
+		m_PendingSwatch    = swatchColor;
+		m_PendingTextColor = textColor;
+		m_SourceWidget     = sourceWidget;
+	}
+
+	void ShowInternal( string text, string iconPath, int swatchColor, int textColor = 0 )
+	{
+		if ( !m_Root || text == "" )
+			return;
+
+		bool hasIcon   = ( iconPath != "" );
+		bool hasSwatch = ( !hasIcon && swatchColor != 0 );
+
+		// Left offset for text container: icon/swatch = 26px, plain = 6px.
+		float leftDecor;
+		if ( hasIcon || hasSwatch )
+			leftDecor = JMUILayout.Px( 26 );
+		else
+			leftDecor = JMUILayout.Px( 6 );
+
+		if ( m_Icon )
+		{
+			if ( hasIcon )
+			{
+				m_Icon.LoadImageFile( 0, iconPath );
+				m_Icon.SetImage( 0 );
+				int iconColor = ARGB( 255, 255, 255, 255 );
+				if ( swatchColor != 0 )
+					iconColor = swatchColor;
+				m_Icon.SetColor( iconColor );
+				m_Icon.Show( true );
+			}
+			else
+			{
+				m_Icon.Show( false );
+			}
+		}
+
+		if ( m_Swatch )
+		{
+			if ( hasSwatch )
+			{
+				m_Swatch.SetColor( swatchColor );
+				m_Swatch.Show( true );
+			}
+			else
+			{
+				m_Swatch.Show( false );
+			}
+		}
+
+		static const int PAD_R  = 14;
+		static const int PAD_Y  = 6;
+		static const int MARGIN = 32;
+		static const int CHAR_W = 8;
+
+		// Max tooltip width = anchor width minus margins, fallback 500.
+		float maxW = JMUILayout.Px( 500 );
+		Widget anchor = m_Root.GetParent();
+		if ( anchor )
+		{
+			float aw, ah;
+			anchor.GetScreenSize( aw, ah );
+			if ( aw > 100 )
+				maxW = aw - JMUILayout.Px( MARGIN * 2 );
+		}
+
+		// Total width: fit single line if possible, otherwise cap at maxW.
+		float singleW = ( text.Length() + 1 ) * JMUILayout.Px( CHAR_W ) + leftDecor + JMUILayout.Px( PAD_R );
+		float w;
+		if ( singleW <= maxW )
+			w = singleW;
+		else
+			w = maxW;
+
+		m_TooltipW = w;
+
+		// Container fills available text width; RichTextWidget fills 100% of it and
+		// self-sizes vertically via "size to text v" - no manual line counting needed.
+		float containerW = w - leftDecor - JMUILayout.Px( PAD_R );
+		if ( m_TextContainer )
+		{
+			m_TextContainer.SetFlags( WidgetFlags.EXACTPOS,   true );
+			m_TextContainer.SetFlags( WidgetFlags.HEXACTSIZE, true );
+			m_TextContainer.SetFlags( WidgetFlags.VEXACTSIZE, true );
+			m_TextContainer.SetPos( leftDecor, JMUILayout.Px( PAD_Y ) );
+			m_TextContainer.SetSize( containerW, JMUILayout.Px( 10 ) );
+		}
+
+		if ( m_Text )
+		{
+			m_Text.SetText( text );
+			if ( textColor != 0 )
+				m_Text.SetColor( textColor );
+			else
+				m_Text.SetColor( JMTheme.TEXT_SECONDARY );
+		}
+
+		// Show with a temporary height - Update() will read the real rendered height.
+		m_Root.SetFlags( WidgetFlags.HEXACTSIZE, true );
+		m_Root.SetFlags( WidgetFlags.VEXACTSIZE, true );
+		m_Root.SetSize( w, JMUILayout.Px( 40 ) );
+		m_Root.Show( true );
+
+		// Raise above every sibling so nothing else in the form obscures it.
+		Widget parent = m_Root.GetParent();
+		if ( parent && parent.ToString() != "INVALID" )
+		{
+			Widget sibling = parent.GetChildren();
+			while ( sibling && sibling.ToString() != "INVALID" )
+			{
+				Widget next = sibling.GetSibling();
+				if ( sibling != m_Root )
+					m_Root.SetSort( sibling.GetSort() + 1, true );
+				sibling = next;
+			}
+		}
+
+		m_Visible = true;
+	}
+
+	void HideInternal()
+	{
+		m_Pending      = false;
+		m_SourceWidget = null;
+
+		if ( m_Root )
+			m_Root.Show( false );
+
+		m_Visible = false;
+	}
+
+	void Update()
+	{
+		// If the source widget (or any ancestor) is hidden or destroyed, cancel pending show and hide tooltip.
+		// This handles closing the form while a tooltip is pending or visible.
+		if ( m_Pending || m_Visible )
+		{
+			Widget vis = m_SourceWidget;
+			while ( true )
+			{
+				if ( !vis || !vis.IsVisible() )
+				{
+					HideInternal();
+					return;
+				}
+				vis = vis.GetParent();
+				if (vis == JMStatics.WINDOWS_CONTAINER)
+					break;
+			}
+		}
+
+		// Delayed-show: fire ShowInternal once the hover deadline passes.
+		if ( m_Pending && g_Game.GetTime() >= m_PendingTimer )
+		{
+			m_Pending = false;
+			ShowInternal( m_PendingText, m_PendingIcon, m_PendingSwatch, m_PendingTextColor );
+		}
+
+		if ( !m_Visible || !m_Root )
+			return;
+
+		static const int PAD_Y = 6;
+
+		// Read actual rendered text height from the RichTextWidget (size-to-content).
+		if ( m_TextContainer && m_Text )
+		{
+			float tw, th;
+			m_Text.GetScreenSize( tw, th );
+			if ( th > 1 )
+			{
+				float newH = th + JMUILayout.Px( PAD_Y * 2 );
+				m_Root.SetSize( m_TooltipW, newH );
+				m_TextContainer.SetSize( m_TooltipW - JMUILayout.Px( 14 ), th );
+			}
+		}
+
+		// Position in anchor-local space, flip if near edges.
+		float ax, ay, aw, ah;
+		Widget anchor = m_Root.GetParent();
+		if ( !anchor )
+			return;
+		anchor.GetScreenPos( ax, ay );
+		anchor.GetScreenSize( aw, ah );
+
+		int mx, my;
+		GetMousePos( mx, my );
+
+		float cx = mx - ax;
+		float cy = my - ay;
+
+		float rw, rh;
+		m_Root.GetScreenSize( rw, rh );
+
+		float px = cx + JMUILayout.Px( 14 );
+		float py = cy + JMUILayout.Px( 20 );
+
+		if ( px + rw > aw - JMUILayout.Px( 4 ) )
+			px = cx - rw - JMUILayout.Px( 6 );
+		if ( py + rh > ah - JMUILayout.Px( 4 ) )
+			py = cy - rh - JMUILayout.Px( 6 );
+
+		if ( px < 0 ) px = 0;
+		if ( py < 0 ) py = 0;
+
+		m_Root.SetPos( px, py );
+	}
+}

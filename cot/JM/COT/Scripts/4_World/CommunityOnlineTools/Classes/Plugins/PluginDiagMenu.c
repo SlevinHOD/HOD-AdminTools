@@ -1,8 +1,7 @@
-#ifdef DIAG_DEVELOPER
+#ifdef DIAG
 modded class PluginDiagMenu
 {
 	protected string m_COT_TextDiagsRootMenu         = "COT";
-
 	protected int m_COT_DiagsRootMenuID;
 	protected int m_COT_DiagsBool_SpectatorCamDbgDraw;
 

@@ -1,8 +1,11 @@
 modded class BoatScript
 {
 	static ref CF_DoublyLinkedNodes_WeakRef<BoatScript> s_JM_AllBoats = new CF_DoublyLinkedNodes_WeakRef<BoatScript>();
-
 	ref CF_DoublyLinkedNode_WeakRef<BoatScript> s_JM_Node;
+	protected bool m_JM_WasDestroyed = false;
+
+	// Tracks the last player who entered the driver seat (non-Expansion fallback)
+	string m_JM_LastDriverUID;
 
 	void BoatScript()
 	{
@@ -13,6 +16,82 @@ modded class BoatScript
 	{
 		if (s_JM_AllBoats)
 			s_JM_AllBoats.Remove(s_JM_Node);
+	}
+
+	#ifndef EXPANSIONMODVEHICLE
+	override void OnDriverEnter( Human player )
+	{
+		super.OnDriverEnter( player );
+
+		if ( g_Game.IsServer() )
+		{
+			PlayerBase driver;
+			if ( Class.CastTo( driver, player ) && driver.GetIdentity() )
+				m_JM_LastDriverUID = driver.GetIdentity().GetId();
+		}
+	}
+	#endif
+
+	override void EEItemAttached(EntityAI item, string slot_name)
+	{
+		super.EEItemAttached(item, slot_name);
+
+		if (g_cotBase)
+			g_cotBase.OnItemAttached(this, slot_name, item);
+	}
+
+	override void EEItemDetached(EntityAI item, string slot_name)
+	{
+		super.EEItemDetached(item, slot_name);
+
+		if (g_cotBase)
+			g_cotBase.OnItemDetached(this, slot_name, item);
+	}
+
+	override void EEHealthLevelChanged(int oldLevel, int newLevel, string zone)
+	{
+		super.EEHealthLevelChanged(oldLevel, newLevel, zone);
+
+		if (g_Game.IsServer() && !m_JM_WasDestroyed && newLevel == GameConstants.STATE_RUINED)
+		{
+			m_JM_WasDestroyed = true;
+			CheckAndCreateCompensation();
+		}
+	}
+
+	protected void CheckAndCreateCompensation()
+	{
+		string ownerSteamID = "";
+
+		// Try to get driver's steam ID
+		Human driver = CrewMember(DayZPlayerConstants.VEHICLESEAT_DRIVER);
+		if (driver)
+		{
+			PlayerBase driverPlayer;
+			if (Class.CastTo(driverPlayer, driver))
+			{
+				PlayerIdentity identity = driverPlayer.GetIdentity();
+				if (identity)
+					ownerSteamID = identity.GetPlainId();
+			}
+		}
+
+		// If no driver, try Expansion owner UID
+		#ifdef EXPANSIONMODVEHICLE
+		if (ownerSteamID == "")
+		{
+			ExpansionVehicle vehicle;
+			if (ExpansionVehicle.Get(vehicle, this))
+			{
+				ownerSteamID = vehicle.GetOwnerUID();
+			}
+		}
+		#endif
+
+		if (ownerSteamID != "")
+		{
+			JMCompensationHelper.CreateCompensationBackup(this, ownerSteamID);
+		}
 	}
 
 	override bool EEOnDamageCalculated(TotalDamageResult damageResult, int damageType, EntityAI source, int component, string dmgZone, string ammo, vector modelPos, float speedCoef)
@@ -54,6 +133,23 @@ modded class BoatScript
 		float fluidFraction = GetFluidFraction(fluid);
 		if (fluidCap > 0.0 && fluidFraction < 1.0)
 			Fill(fluid, fluidCap * (1.0 - fluidFraction));
+	}
+
+	//! Move one fluid to an exact fraction of its capacity - see
+	//! CarScript::COT_SetCarFluid01 for why both Fill and Leak are needed.
+	void COT_SetBoatFluid01( BoatFluid fluid, float fraction )
+	{
+		float fluidCap = GetFluidCapacity( fluid );
+		if ( fluidCap <= 0.0 )
+			return;
+
+		float target = Math.Clamp( fraction, 0.0, 1.0 );
+		float delta = ( target - GetFluidFraction( fluid ) ) * fluidCap;
+
+		if ( delta > 0.0 )
+			Fill( fluid, delta );
+		else if ( delta < 0.0 )
+			Leak( fluid, -delta );
 	}
 
 	void COT_Refuel()

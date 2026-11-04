@@ -1,0 +1,153 @@
+//! Client-local copies of items, built to feed an ItemPreviewWidget. DayZ cannot draw a
+//! non-entity and the items COT shows (other players' inventory, scanned world items) are
+//! usually not replicated here, so a preview is a local copy spawned from the classname with
+//! the reported state (health, quantity, food stage) applied. Never the real item. Order: Spawn, Attach, Freeze LAST, Destroy.
+class JMLocalPreview
+{
+	//! Spawn `type` with the reported state. Pass a negative value for anything that does not
+	//! apply (no health / no quantity / not food): it is left at the class default.
+	static EntityAI Spawn( string type, float health = -1, float quantity = -1, int foodStage = -1 )
+	{
+		EntityAI ent = EntityAI.Cast( g_Game.CreateObject( type, vector.Zero, true, false, false ) );
+		if ( !ent )
+			return null;
+
+		dBodyActive( ent, ActiveState.INACTIVE );
+		dBodyDynamic( ent, false );
+
+		Apply( ent, health, quantity, foodStage );
+
+		return ent;
+	}
+
+	//! Apply the reported state to an existing local copy.
+	static void Apply( EntityAI ent, float health, float quantity, int foodStage )
+	{
+		if ( !ent )
+			return;
+
+		if ( health >= 0 )
+			ApplyHealth( ent, health );
+
+		ItemBase asItem;
+		if ( !Class.CastTo( asItem, ent ) )
+			return;
+
+		if ( g_Game.IsServer() && quantity >= 0 )
+			asItem.SetQuantity( quantity, false );
+
+		Edible_Base asFood;
+		if ( foodStage >= 0 && Class.CastTo( asFood, asItem ) && asFood.GetFoodStage() )
+			asFood.GetFoodStage().ChangeFoodStage( foodStage );
+	}
+
+	protected static void ApplyHealth( EntityAI ent, float health )
+	{
+		ent.SetHealth( "", "", health );
+
+		float maxHealth = MiscGameplayFunctions.GetTypeMaxGlobalHealth( ent.GetType() );
+		if ( maxHealth <= 0 )
+			maxHealth = ent.GetMaxHealth( "", "" );
+
+		if ( maxHealth <= 0 )
+			return;
+
+		float health01 = Math.Clamp( health / maxHealth, 0, 1 );
+
+		TStringArray zones = new TStringArray;
+		ent.GetDamageZones( zones );
+
+		foreach ( string zone : zones )
+			ent.SetHealth01( zone, "Health", health01 );
+	}
+
+	//! Give `parent` a child copy with the reported state. Tries the slot id (or -1) first,
+	//! then any attachment slot, then the LOCAL inventory operation (seats a magazine the
+	//! Create* calls refuse). `attachmentsOnly` skips the cargo fallback. Null when nothing took it.
+	static EntityAI Attach( EntityAI parent, string type, float health = -1, float quantity = -1, int foodStage = -1, int slotId = -1, bool attachmentsOnly = true )
+	{
+		if ( !parent )
+			return null;
+
+		EntityAI child;
+
+		if ( slotId >= 0 )
+			child = parent.GetInventory().CreateAttachmentEx( type, slotId );
+
+		if ( !child )
+			child = parent.GetInventory().CreateAttachment( type );
+
+		if ( !child )
+			child = AttachLocal( parent, type, slotId );
+
+		if ( !child && !attachmentsOnly )
+			child = parent.GetInventory().CreateInInventory( type );
+
+		if ( !child )
+			return null;
+
+		Apply( child, health, quantity, foodStage );
+
+		return child;
+	}
+
+	//! Spawn a child loose and hand it to the parent with a LOCAL inventory operation - the path
+	//! EntityAI itself exposes for client-side work, and the one that takes a magazine when
+	//! CreateAttachment will not. Returns null when the parent refused it.
+	static EntityAI AttachLocal( EntityAI parent, string type, int slotId )
+	{
+		EntityAI ent = EntityAI.Cast( g_Game.CreateObject( type, vector.Zero, true, false, false ) );
+		if ( !ent )
+			return null;
+
+		bool taken = false;
+
+		if ( slotId >= 0 )
+			taken = parent.LocalTakeEntityToTargetAttachmentEx( parent, ent, slotId );
+
+		if ( !taken )
+			taken = parent.LocalTakeEntityToTargetAttachment( parent, ent );
+
+		if ( !taken )
+		{
+			g_Game.ObjectDelete( ent );
+			return null;
+		}
+
+		return ent;
+	}
+
+	//! Freeze a preview tree once fully built. Simulation is switched off LAST, not at
+	//! spawn: a weapon with simulation already off does not run the state change that
+	//! seats a magazine, so it came up with its optic and no mag.
+	static void Freeze( EntityAI ent )
+	{
+		if ( !ent )
+			return;
+
+		ent.DisableSimulation( true );
+	}
+
+	static void Destroy( EntityAI ent )
+	{
+		if ( ent && g_Game )
+			g_Game.ObjectDelete( ent );
+	}
+
+	//! Point an ItemPreviewWidget at `ent` with exactly the call sequence vanilla's own inventory
+	//! icon uses, in the same order. The engine frames the model itself from the config's bounding
+	//! box and invView - overriding the position is what used to push previews back into a fraction
+	//! of their cell.
+	static void Show( ItemPreviewWidget preview, EntityAI ent )
+	{
+		if ( !preview || !ent )
+			return;
+
+		preview.SetForceFlipEnable( true );
+		preview.SetForceFlip( false );
+		preview.SetItem( ent );
+		preview.SetModelOrientation( vector.Zero );
+		preview.SetView( ent.GetViewIndex() );
+		preview.Show( true );
+	}
+}

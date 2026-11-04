@@ -7,47 +7,6 @@ class JMWebhookSerialize : Managed
 		Connections = new array< ref JMWebhookConnectionGroup >;
 	}
 
-	void Load()
-	{
-		JsonFileLoader< JMWebhookSerialize >.JsonLoadFile( JMConstants.FILE_WEBHOOK, this );
-		
-		for ( int i = 0; i < Connections.Count(); ++i )
-		{
-			Connections[i].Init();
-		}
-	}
-
-	void Save()
-	{
-		JsonFileLoader< JMWebhookSerialize >.JsonSaveFile( JMConstants.FILE_WEBHOOK, this );
-	}
-
-	void OnSend( ParamsWriteContext ctx )
-	{
-		ctx.Write( Connections );
-	}
-
-	bool OnRecieve( ParamsReadContext ctx )
-	{
-		ctx.Read( Connections );
-
-		return true;
-	}
-
-	bool Remove( string name )
-	{
-		for ( int i = 0; i < Connections.Count(); ++i )
-		{
-			if ( Connections[i].Name == name )
-			{
-				Connections.Remove( i );
-				return true;
-			}
-		}
-
-		return false;
-	}
-
 	JMWebhookConnectionGroup Get( string name )
 	{
 		for ( int i = 0; i < Connections.Count(); ++i )
@@ -64,6 +23,51 @@ class JMWebhookSerialize : Managed
 		Connections.Insert( group );
 
 		return group;
+	}
+
+	void Load()
+	{
+		JMJsonFile< JMWebhookSerialize >.Load( JMConstants.FILE_WEBHOOK, this );
+		
+		for ( int i = 0; i < Connections.Count(); ++i )
+		{
+			Connections[i].Init();
+		}
+	}
+
+	void Save()
+	{
+		JMJsonFile< JMWebhookSerialize >.Save( JMConstants.FILE_WEBHOOK, this );
+	}
+
+	void OnSend( ParamsWriteContext ctx )
+	{
+		ctx.Write( Connections );
+	}
+
+	[Obsolete("Use OnReceive")]
+	bool OnRecieve( ParamsReadContext ctx );
+
+	bool OnReceive( ParamsReadContext ctx )
+	{
+		if ( !ctx.Read( Connections ) )
+			return false;
+
+		return true;
+	}
+
+	bool Remove( string name )
+	{
+		for ( int i = 0; i < Connections.Count(); ++i )
+		{
+			if ( Connections[i].Name == name )
+			{
+				Connections.Remove( i );
+				return true;
+			}
+		}
+
+		return false;
 	}
 }
 

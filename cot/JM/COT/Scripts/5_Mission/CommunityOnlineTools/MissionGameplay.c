@@ -1,30 +1,30 @@
 modded class MissionGameplay
 {
 	protected ref JMDebugMonitor m_CDebugMonitor;  //! Legacy, not used, only kept for compatibility with 3rd party mods
-
 	protected JMPlayerInstance m_OfflineInstance;
-
 	protected bool m_COT_DebugMonitorWasVisible;
+
+	//! Global Ctrl+Z/Ctrl+Y undo/redo of the shared JMActionHistory stack. Edge-detected so a held
+	//! key fires once. Map Editor keeps its own shortcut for its object stack while shown.
+	protected bool m_ActionHistoryUndoKeyWasDown;
+	protected bool m_ActionHistoryRedoKeyWasDown;
 
 	void MissionGameplay()
 	{
 		if ( !g_cotBase )
 			g_cotBase = new CommunityOnlineTools;
-
-		JMScriptInvokers.COT_ON_OPEN.Insert(COT_OnOpen);
+		if ( !g_cotGame )
+			g_cotGame = g_cotBase;
 	}
 
 	void ~MissionGameplay()
 	{
 		g_cotBase = null;
-
-		if (g_Game)
-			JMScriptInvokers.COT_ON_OPEN.Remove(COT_OnOpen);
 	}
 
 	override void ResetGUI()
 	{
-	#ifdef DIAG
+	#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_0(this);
 		PrintFormat("Is GUI reset disabled? %1", m_COT_TempDisableOnSelectPlayer.ToString());
 	#endif
@@ -37,6 +37,9 @@ modded class MissionGameplay
 
 	void OfflineMissionStart()
 	{
+		if (g_Game.GetPlayer())
+			return;  //! Looks like mission init.c already created a character
+
 		vector position = GetSpawnPoints().GetRandomElement();
 
 		JsonDataContaminatedAreas effectAreaData = EffectAreaLoader.GetData();
@@ -117,8 +120,7 @@ modded class MissionGameplay
 
 					if (!knife)
 					{
-						TStringArray inventorySlot = {};
-						child.ConfigGetTextArray("inventorySlot", inventorySlot);
+						TStringArray inventorySlot = g_Game.COT_GetInventorySlots(child);
 						foreach (string slotName: inventorySlot)
 						{
 							slotName.ToLower();
@@ -219,6 +221,45 @@ modded class MissionGameplay
 		
 		if ( IsMissionOffline() )
 			GetPermissionsManager().OnClientDisconnected( JMConstants.OFFLINE_GUID, m_OfflineInstance );
+
+		COT_DestroyWidgetHandlers();
+	}
+
+	void COT_DestroyWidgetHandlers()
+	{
+		int count;
+
+		auto node = COT_ScriptedWidgetEventHandler.s_COT_All.m_Head;
+		while (node)
+		{
+			auto widgetHandler = node.m_Value;
+			node = node.m_Next;
+			if (widgetHandler)
+			{
+			#ifdef DIAG_DEVELOPER
+			#ifdef DZ_Expansion_Core
+				EXError.Info(this, "OnMissionFinish -> destroy " + widgetHandler);
+			#endif
+			#endif
+				widgetHandler.Destroy();
+				++count;
+			}
+		}
+
+	#ifdef DIAG_DEVELOPER
+	#ifdef DZ_Expansion_Core
+		if (count > 0)
+			EXError.Info(this, string.Format("Cleaned up %1 dangling COT ScriptedWidgetEventHandlers", count));
+	#endif
+	#endif
+	}
+
+	override void CloseAllMenus()
+	{
+		super.CloseAllMenus();
+
+		if (UIActionTooltip.s_Instance)
+			UIActionTooltip.s_Instance.Destroy();
 	}
 
 	override void OnUpdate( float timeslice )
@@ -232,28 +273,31 @@ modded class MissionGameplay
 
 			GetCommunityOnlineTools().OnUpdate( timeslice );
 
+			if ( GetCommunityOnlineToolsBase().IsOpen() )
+				PollActionHistoryHotkeys();
+
+			if ( m_DebugMonitor )
+			{
+				if ( GetCommunityOnlineToolsBase().IsOpen() )
+				{
+					if (m_DebugMonitor.IsVisible())
+					{
+						m_COT_DebugMonitorWasVisible = true;
+						m_DebugMonitor.Hide();
+					}
+				}
+				else if (m_COT_DebugMonitorWasVisible)
+				{
+					m_DebugMonitor.Show();
+				}
+			}
+
 			PlayerBase player;
 			if (Class.CastTo(player, g_Game.GetPlayer()) && player.COTIsInvisible(JMInvisibilityType.DisableSimulation))
 			{
 				//! Since PlayerBase::EOnFrame will no longer be called by the engine if simulation is disabled,
 				//! call stand-in from here so HUD gets updated
 				player.COT_SimulationDisabled_OnFrame(timeslice);
-			}
-		}
-	}
-
-	void COT_OnOpen(bool isOpen)
-	{
-		if (m_DebugMonitor)
-		{
-			if (isOpen)
-			{
-				m_COT_DebugMonitorWasVisible = m_DebugMonitor.IsVisible();
-				m_DebugMonitor.Hide();
-			}
-			else if (m_COT_DebugMonitorWasVisible)
-			{
-				m_DebugMonitor.Show();
 			}
 		}
 	}
@@ -266,9 +310,37 @@ modded class MissionGameplay
 			m_COT_DebugMonitorWasVisible = false;
 	}
 
+	//! Ctrl+Z/Ctrl+Y for the shared JMActionHistory stack. Skipped while
+	//! typing (same EditBoxWidget check CF_InputBindings uses to gate its own
+	//! global input) and while Map Editor's tab is shown (it owns the chord
+	//! for its own stack in that case - see JMMapEditorForm.IsShown()).
+	protected void PollActionHistoryHotkeys()
+	{
+		if ( JMMapEditorForm.IsShown() )
+			return;
+
+		Widget focus = GetFocus();
+		bool typing = focus && ( focus.IsInherited( EditBoxWidget ) || focus.IsInherited( MultilineEditBoxWidget ) );
+
+		bool ctrl = CTRL();
+
+		JMActionHistoryModule historyModule;
+		CF_Modules<JMActionHistoryModule>.Get( historyModule );
+
+		bool undoDown = ctrl && ( KeyState( KeyCode.KC_Z ) > 0 );
+		if ( undoDown && !m_ActionHistoryUndoKeyWasDown && !typing && historyModule )
+			historyModule.UndoLastAction();
+		m_ActionHistoryUndoKeyWasDown = undoDown;
+
+		bool redoDown = ctrl && ( KeyState( KeyCode.KC_Y ) > 0 );
+		if ( redoDown && !m_ActionHistoryRedoKeyWasDown && !typing && historyModule )
+			historyModule.RedoLastAction();
+		m_ActionHistoryRedoKeyWasDown = redoDown;
+	}
+
 	override void ShowInventory()
 	{
-		if ( GetCommunityOnlineToolsBase().IsOpen() || GetCOTWindowManager().HasAnyActive() )
+		if ( GetCommunityOnlineToolsBase().IsOpen() || GetCOTWindowManager().HasAnyUnpinnedActive() )
 			return;
 
 		super.ShowInventory();
@@ -276,7 +348,7 @@ modded class MissionGameplay
 
 	override void Pause()
 	{
-		if ( GetCommunityOnlineToolsBase().IsOpen() || GetCOTWindowManager().HasAnyActive() )
+		if ( GetCommunityOnlineToolsBase().IsOpen() || GetCOTWindowManager().HasAnyUnpinnedActive() )
 			return;
 
 		super.Pause();
@@ -284,7 +356,7 @@ modded class MissionGameplay
 
 	override protected void HandleMapToggleByKeyboardShortcut(Man player)
 	{
-		if ( GetCommunityOnlineToolsBase().IsOpen() || GetCOTWindowManager().HasAnyActive() )
+		if ( GetCommunityOnlineToolsBase().IsOpen() || GetCOTWindowManager().HasAnyUnpinnedActive() )
 			return;
 
 		super.HandleMapToggleByKeyboardShortcut(player);

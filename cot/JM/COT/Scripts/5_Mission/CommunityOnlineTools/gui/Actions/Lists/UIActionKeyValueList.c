@@ -1,0 +1,161 @@
+//  UIActionKeyValueList - compact read-only two-column info panel. Rows are
+//  created lazily and updated in place by SetValue(key, value), so refreshes
+//  cause no widget churn. RemoveKey(key) drops a row; Clear() drops all.
+class UIActionKeyValueList: UIActionBase
+{
+	protected Widget m_Rows;
+	protected ref array<string>            m_Keys;
+
+	//! Height of one row, matching UIActionText.layout's own `size 1 30`.
+	static const int ROW_HEIGHT = 30;
+	protected ref map<string, TextWidget>  m_ValueWidgets;
+	protected ref map<string, string>      m_ValueStrings;
+
+	//! Returns all registered keys in insertion order.
+	array<string> GetKeys()
+	{
+		return m_Keys;
+	}
+
+	//! Get the current displayed value for a key ("" if not present).
+	string GetValue( string key )
+	{
+		return m_ValueStrings[key];
+	}
+
+	//! Set or update a key/value pair; creates a row if the key is new. `icon` is
+	//! only read on creation (row identity, not value) - re-setting it on every
+	//! refresh would reload the image needlessly.
+	void SetValue( string key, string value, string icon = "" )
+	{
+		if ( m_ValueWidgets.Contains( key ) )
+		{
+			m_ValueStrings.Set( key, value );
+			TextWidget tw = m_ValueWidgets.Get( key );
+			if ( tw )
+				tw.SetText( value );
+			return;
+		}
+
+		// Create new row via UIActionText layout
+		Widget rowWidget = g_Game.GetWorkspace().CreateWidgets( "JM/COT/GUI/layouts/uiactions/UIActionText.layout", m_Rows );
+
+		if ( !rowWidget )
+			return;
+
+		UIActionText row;
+		rowWidget.GetScript( row );
+
+		if ( row )
+		{
+			row.SetLabel( key );
+			row.SetText( value );
+
+			// Right-hand slot: label - value - icon. The left slot sits between
+			// the row edge and the label and crowds it on a narrow panel.
+			if ( icon != "" )
+				row.SetIconRight( icon );
+
+			// Grab the value TextWidget so we can update it cheaply later
+			TextWidget valueTw;
+			Class.CastTo( valueTw, rowWidget.FindAnyWidget( "action" ) );
+			m_ValueWidgets.Insert( key, valueTw );
+			m_ValueStrings.Insert( key, value );
+			m_Keys.Insert( key );
+
+			UpdateHeight();
+		}
+	}
+
+	override void OnInit()
+	{
+		super.OnInit();
+
+		Class.CastTo( m_Rows, layoutRoot.FindAnyWidget( "action_rows" ) );
+
+		m_Keys         = new array<string>;
+		m_ValueWidgets = new map<string, TextWidget>;
+		m_ValueStrings = new map<string, string>;
+	}
+
+	//! Grow the root to fit the rows. The layout's root is `size 1 1` with
+	//! `vexactsize 1` (1px tall) and never sizes to content, so without this the
+	//! rows draw inside a 1px box and the control renders as nothing.
+	protected void UpdateHeight()
+	{
+		if ( !layoutRoot )
+			return;
+
+		float w, h;
+		layoutRoot.GetSize( w, h );
+
+		// Measure the rows grid rather than multiplying a row count by an
+		// assumed row height: the two disagreed, and the difference came off
+		// the BOTTOM of the list, so the last row or two of every list were
+		// silently clipped. Ask the widget that actually did the layout.
+		float rowsW, rowsH;
+		float height = m_Keys.Count() * JMUILayout.Px( ROW_HEIGHT );
+
+		if ( m_Rows )
+		{
+			m_Rows.Update();
+			m_Rows.GetScreenSize( rowsW, rowsH );
+
+			if ( rowsH > height )
+				height = rowsH;
+		}
+
+		layoutRoot.SetFlags( WidgetFlags.VEXACTSIZE, true );
+		layoutRoot.SetSize( w, height );
+		layoutRoot.Update();
+	}
+
+	//! Remove a single key/value row.
+	void RemoveKey( string key )
+	{
+		if ( !m_ValueWidgets.Contains( key ) )
+			return;
+
+		// Walk children to find and unlink the matching row
+		Widget child = m_Rows.GetChildren();
+		while ( child )
+		{
+			Widget next = child.GetSibling();
+
+			TextWidget valueTw;
+			Class.CastTo( valueTw, child.FindAnyWidget( "action" ) );
+
+			if ( valueTw && valueTw == m_ValueWidgets.Get( key ) )
+			{
+				child.Unlink();
+				break;
+			}
+
+			child = next;
+		}
+
+		m_ValueWidgets.Remove( key );
+		m_ValueStrings.Remove( key );
+		m_Keys.RemoveItem( key );
+
+		UpdateHeight();
+	}
+
+	//! Remove all rows.
+	void Clear()
+	{
+		Widget child = m_Rows.GetChildren();
+		while ( child )
+		{
+			Widget next = child.GetSibling();
+			child.Unlink();
+			child = next;
+		}
+
+		m_ValueWidgets.Clear();
+		m_ValueStrings.Clear();
+		m_Keys.Clear();
+
+		UpdateHeight();
+	}
+}

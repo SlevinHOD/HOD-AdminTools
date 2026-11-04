@@ -1,21 +1,80 @@
 class JMWebhookQueueItem : Managed
 {
 	string m_Type;
-
 	int m_Time;
-
 	ref JMWebhookMessage m_Message;
 
-	void JMWebhookQueueItem( string type, JMWebhookMessage message )
+	// Optional target context for per-player/per-role filtering.
+	// Empty strings mean "no specific target" (send to all groups).
+	string m_TargetGUID;
+
+	//! Comma separated role names the target held when the event was posted - kept on the item
+	//! because the player may be gone from the permissions manager by the time it is sent.
+	string m_TargetRole;
+
+	//! A second player involved in the event (the killer in a death or hit), matched by the
+	//! group filters exactly like the target.
+	string m_OtherGUID;
+	string m_OtherRole;
+
+	//! Steam64 of each, so a group can be filtered by either the GUID or the Steam64 ID.
+	string m_TargetSteam;
+	string m_OtherSteam;
+
+	void JMWebhookQueueItem( string type, JMWebhookMessage message, string targetGUID = "", string targetRole = "" )
 	{
 		m_Type = type;
 		m_Message = message;
 		m_Time = g_Game.GetTickTime();
+		m_TargetGUID = targetGUID;
+		m_TargetRole = targetRole;
 	}
 
-	string GetType()
+	JMWebhookMessage GetMessage()
 	{
-		return m_Type;
+		return m_Message;
+	}
+
+	string GetTargetGUID()
+	{
+		return m_TargetGUID;
+	}
+
+	string GetTargetRole()
+	{
+		return m_TargetRole;
+	}
+
+	void SetOther( string guid, string roles, string steam = "" )
+	{
+		m_OtherGUID = guid;
+		m_OtherRole = roles;
+		m_OtherSteam = steam;
+	}
+
+	void SetTargetSteam( string steam )
+	{
+		m_TargetSteam = steam;
+	}
+
+	string GetTargetSteam()
+	{
+		return m_TargetSteam;
+	}
+
+	string GetOtherSteam()
+	{
+		return m_OtherSteam;
+	}
+
+	string GetOtherGUID()
+	{
+		return m_OtherGUID;
+	}
+
+	string GetOtherRole()
+	{
+		return m_OtherRole;
 	}
 
 	int GetTime()
@@ -23,33 +82,42 @@ class JMWebhookQueueItem : Managed
 		return m_Time;
 	}
 
-	JMWebhookMessage GetMessage()
+	string GetType()
 	{
-		return m_Message;
+		return m_Type;
 	}
 }
 
 class JMWebhookModule: JMModuleBase
 {
 	static ref JsonSerializer s_Serializer = new JsonSerializer();
-
-	private RestApi m_Core;
-
-	private ref map< string, ref set< JMWebhookConnection > > m_ConnectionMap;
-
-	private ref array< ref JMWebhookQueueItem > m_Queue;
-
-	private JMWebhookSerialize m_Settings;
-
-	private string m_ServerHostName;
+	protected RestApi m_Core;
+	protected ref map< string, ref set< JMWebhookConnection > > m_ConnectionMap;
+	protected ref array< ref JMWebhookQueueItem > m_Queue;
+	protected float m_StartTime;
+	protected float m_LastSendTime;
+	protected int m_SentCount;
+	protected float m_TimeToSleep;
+	protected JMWebhookSerialize m_Settings;
+	protected string m_ServerHostName;
 
 	void JMWebhookModule()
 	{
 		m_Queue = new array< ref JMWebhookQueueItem >();
 	}
 
-	override void EnableUpdate()
+	bool SetConnection( string name, string grpName, bool enabled )
 	{
+		#ifdef JM_COT_DIAG_LOGGING
+		auto trace = CF_Trace_3(this, "SetConnection").Add(name).Add(grpName).Add(enabled);
+		#endif
+
+		JMWebhookConnectionGroup group = m_Settings.Get( grpName );
+		if ( Assert_Null( group ) )
+			return false;
+
+		group.Set( name, enabled );
+		return true;
 	}
 
 	override void OnInit()
@@ -155,7 +223,7 @@ class JMWebhookModule: JMModuleBase
 
 		#ifdef JM_COT_WEBHOOK_DEBUG
 			group.ContextURL = "https://discordapp.com/api/webhooks/";
-			group.Address = "729943333564317726/_K1zSZcKi5qL2_qqJnUvgeH1cieGNxqkNtsxV640Yya-zaKcfMPN5yOTxQEoEAjk3TAS";
+			group.Address = "YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN";
 		#else
 			group.ContextURL = "";
 			group.Address = "";
@@ -173,27 +241,31 @@ class JMWebhookModule: JMModuleBase
 
 		m_Settings.Save();
 
-		g_Game.GameScript.Call( this, "Thread_ProcessQueue", NULL );
+		m_StartTime = g_Game.GetTickTime();
+		m_LastSendTime = m_StartTime;
 	}
 
 	override void OnMissionLoaded()
 	{
 		super.OnMissionLoaded();
 
-		auto message = CreateDiscordMessage();
-				
-		message.GetEmbed().AddField( "Server Status", "Server is starting up." );
+		auto message = CreateDiscordMessageColored( JMConstants.WEBHOOK_COLOR_SUCCESS );
+		message.GetEmbed().SetTitle( "Server Online" );
+		message.GetEmbed().SetDescription( "The server has started up and is accepting connections." );
 
 		Post( "ServerStartup", message );
 	}
 
 	override void OnMissionFinish()
 	{
-		auto message = CreateDiscordMessage();
-
-		message.GetEmbed().AddField( "Server Status", "Server has shutdown safely." );
+		auto message = CreateDiscordMessageColored( JMConstants.WEBHOOK_COLOR_NEUTRAL );
+		message.GetEmbed().SetTitle( "Server Offline" );
+		message.GetEmbed().SetDescription( "The server has shut down safely." );
 
 		Post( "ServerShutdown", message );
+		ProcessQueue();
+
+		m_Queue.Clear();
 	}
 
 	void SaveConnections()
@@ -202,7 +274,6 @@ class JMWebhookModule: JMModuleBase
 		auto trace = CF_Trace_0(this, "SaveConnections");
 		#endif
 
-		JMWebhookSerialize serialize = new JMWebhookSerialize;
 		m_Settings.Save();
 	}
 
@@ -219,7 +290,7 @@ class JMWebhookModule: JMModuleBase
 		return true;
 	}
 
-	private void FixConnectionMap()
+	protected void FixConnectionMap()
 	{
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_0(this, "FixConnectionMap");
@@ -244,20 +315,6 @@ class JMWebhookModule: JMModuleBase
 				mappedConnections.Insert( m_Settings.Connections[i].Types[j] );
 			}
 		}
-	}
-
-	bool SetConnection( string name, string grpName, bool enabled )
-	{
-		#ifdef JM_COT_DIAG_LOGGING
-		auto trace = CF_Trace_3(this, "SetConnection").Add(name).Add(grpName).Add(enabled);
-		#endif
-
-		JMWebhookConnectionGroup group = m_Settings.Get( grpName );
-		if ( Assert_Null( group ) )
-			return false;
-
-		group.Set( name, enabled );
-		return true;
 	}
 
 	bool RemoveConnection( string name, string grpName )
@@ -366,18 +423,130 @@ class JMWebhookModule: JMModuleBase
 		m_Queue.Insert( new JMWebhookQueueItem( connectionType, message ) );
 	}
 
-	private void Thread_ProcessQueue()
+	// Post with an optional target GUID / role for per-player or per-role filtering.
+	void Post( string connectionType, JMWebhookMessage message, string targetGUID, string targetRole = "" )
 	{
-		#ifdef JM_COT_DIAG_LOGGING
-		auto trace = CF_Trace_0(this, "Thread_ProcessQueue");
-		#endif
+		if ( IsMissionClient() )
+			return;
 
-		int num = 0;
-		int startTime = g_Game.GetTickTime();
-		int lastSendTime = g_Game.GetTickTime();
-		int qps = 1;
+		if ( Assert_Null( message ) )
+			return;
 
-		while ( true )
+		m_Queue.Insert( new JMWebhookQueueItem( connectionType, message, targetGUID, targetRole ) );
+	}
+
+	//! Post an event done by (or to) a player: a group filtered to that player's GUID or to one of
+	//! their roles receives it. `other` is a second player in the same event, e.g. the killer.
+	//! Either may be NULL; with neither it is a plain Post().
+	void PostAs( string connectionType, JMWebhookMessage message, JMPlayerInstance player, JMPlayerInstance other = NULL )
+	{
+		if ( IsMissionClient() )
+			return;
+
+		if ( Assert_Null( message ) )
+			return;
+
+		string guid = "";
+		string roles = "";
+
+		if ( player )
+		{
+			guid = player.GetGUID();
+			roles = JoinRoles( player );
+		}
+
+		JMWebhookQueueItem item = new JMWebhookQueueItem( connectionType, message, guid, roles );
+
+		if ( player )
+			item.SetTargetSteam( player.GetSteam64ID() );
+
+		if ( other )
+			item.SetOther( other.GetGUID(), JoinRoles( other ), other.GetSteam64ID() );
+
+		m_Queue.Insert( item );
+	}
+
+	//! The permissions instance behind a player entity, or NULL (AI, a body with no identity).
+	JMPlayerInstance InstanceOf( PlayerBase player )
+	{
+		if ( !player )
+			return NULL;
+
+		PlayerIdentity identity = player.GetIdentity();
+		if ( !identity )
+			return NULL;
+
+		return GetPermissionsManager().GetPlayer( identity.GetId() );
+	}
+
+	protected string JoinRoles( JMPlayerInstance player )
+	{
+		string joined = "";
+
+		array< string > roles = player.GetRoles();
+		for ( int i = 0; i < roles.Count(); i++ )
+			joined += "," + roles[i];
+
+		return joined;
+	}
+
+	//! A group with a GUID and/or role filter only receives events whose target or other player
+	//! matches it (both filters, when both are set). Unfiltered groups receive everything.
+	protected bool MatchesGroupFilter( JMWebhookConnectionGroup grp, JMWebhookQueueItem item )
+	{
+		if ( grp.FilterGUID != "" )
+		{
+			bool isTarget = grp.FilterGUID == item.GetTargetGUID() || grp.FilterGUID == item.GetTargetSteam();
+			bool isOther  = grp.FilterGUID == item.GetOtherGUID() || grp.FilterGUID == item.GetOtherSteam();
+
+			if ( !isTarget && !isOther )
+				return false;
+		}
+
+		if ( grp.FilterRole != "" )
+		{
+			if ( !HasRoleFor( grp.FilterRole, item.GetTargetGUID(), item.GetTargetRole() ) && !HasRoleFor( grp.FilterRole, item.GetOtherGUID(), item.GetOtherRole() ) )
+				return false;
+		}
+
+		return true;
+	}
+
+	//! `roles` is what the player held when the event was posted; the permissions manager is the
+	//! fallback for a Post() that only knew the GUID.
+	protected bool HasRoleFor( string role, string guid, string roles )
+	{
+		if ( guid == "" )
+			return false;
+
+		string padded = roles + ",";
+		if ( padded.IndexOf( "," + role + "," ) != -1 )
+			return true;
+
+		JMPlayerInstance pi = GetPermissionsManager().GetPlayer( guid );
+
+		return pi && pi.HasRole( role );
+	}
+
+	[Obsolete("Use ProcessQueue")]
+	protected void Thread_ProcessQueue();
+
+	override void OnUpdate(float timeslice)
+	{
+		if (m_TimeToSleep > timeslice)
+		{
+			m_TimeToSleep -= timeslice;
+		}
+		else
+		{
+			m_TimeToSleep = 0;
+			ProcessQueue();
+		}
+	}
+
+	protected void ProcessQueue()
+	{
+		if ( m_Queue )
 		{
 			if ( m_Queue.Count() > 0 )
 			{
@@ -386,42 +555,51 @@ class JMWebhookModule: JMModuleBase
 				if ( !Assert_Null( item ) )
 				{
 					set< JMWebhookConnection > connections = m_ConnectionMap.Get( item.GetType() );
-					if ( !Assert_Null( connections ) )
+					if ( connections )
 					{
 						#ifdef JM_COT_DIAG_LOGGING
 						CF_Log.Debug("Thread_ProcessQueue - item type \"%1\"", item.GetType());
 						#endif
 						for ( int i = 0; i < connections.Count(); i++ )
-							if ( connections[i] != NULL )
-								connections[i].Post( m_Core, s_Serializer, item.GetMessage() );
+						{
+							if ( connections[i] == NULL )
+								continue;
+
+							// Check group-level filter: if the group has a GUID or role filter,
+							// only fire if the queue item's target matches.
+							JMWebhookConnectionGroup grp = connections[i].m_Group;
+							if ( grp && !MatchesGroupFilter( grp, item ) )
+								continue;
+
+							connections[i].Post( m_Core, s_Serializer, item.GetMessage() );
+						}
 					}
 					else
 					{
-						CF_Log.Error("Thread_ProcessQueue - webhook type \"%1\" not registered, please override JMModuleBase::GetWebhookTypes to insert it", item.GetType());
+						CF.FormatError("Thread_ProcessQueue - webhook type \"%1\" not registered, please override JMModuleBase::GetWebhookTypes to insert it", item.GetType());
 					}
 				}
 
 				m_Queue.RemoveOrdered( 0 );
 
-				num++;
-				lastSendTime = g_Game.GetTickTime();
+				++m_SentCount;
+				m_LastSendTime = g_Game.GetTickTime();
 
-				int defer = (int) Math.Clamp( num * 0.1, 1, 2 );
-				Sleep( 250 * Math.Clamp( num, 1, 4 ) * defer );
+				int defer = (int) Math.Clamp( m_SentCount * 0.1, 1, 2 );
+				
+				m_TimeToSleep = 0.25 * Math.Clamp( m_SentCount, 1, 4 ) * defer;
 			} else
 			{
-				if ( startTime - lastSendTime > 1000 )
+				if ( m_LastSendTime - m_StartTime > 1.0 )
 				{
-					startTime = g_Game.GetTickTime();
-					lastSendTime = startTime;
-					num = 0;
+					m_StartTime = g_Game.GetTickTime();
+					m_LastSendTime = m_StartTime;
+					m_SentCount = 0;
 				}
 
-				Sleep( 50 );
+				m_TimeToSleep = 0.05;
 			}
 		}
-
-		m_Queue.Clear();
 	}
 
 	JMWebhookDiscordMessage CreateDiscordMessage()
@@ -432,13 +610,21 @@ class JMWebhookModule: JMModuleBase
 
 		JMWebhookDiscordMessage message = new JMWebhookDiscordMessage;
 		auto embed = message.CreateEmbed();
-		embed.SetColor( 16766720 );
+		embed.SetColor( JMConstants.WEBHOOK_COLOR_DEFAULT );
 
-		embed.SetAuthor( "HOD Admin Tools", // HOD: branding
-			 "https://steamcommunity.com/sharedfiles/filedetails/?id=1564026768", "https://steamuserimages-a.akamaihd.net/ugc/960854969917124348/1A32B80495D9F205E4D91C61AE309D19A44A8B92/" );
-		
-		if ( m_ServerHostName != "" )
-			embed.AddField( "Server:", m_ServerHostName, false );
+		embed.SetAuthor( "HOD Admin Tools", /* HOD: branding */ "https://steamcommunity.com/sharedfiles/filedetails/?id=1564026768", "https://steamuserimages-a.akamaihd.net/ugc/960854969917124348/1A32B80495D9F205E4D91C61AE309D19A44A8B92/" );
+
+		return message;
+	}
+
+	// Creates a message with a custom embed color.
+	JMWebhookDiscordMessage CreateDiscordMessageColored( int color )
+	{
+		JMWebhookDiscordMessage message = new JMWebhookDiscordMessage;
+		auto embed = message.CreateEmbed();
+		embed.SetColor( color );
+
+		embed.SetAuthor( "HOD Admin Tools", /* HOD: branding */ "https://steamcommunity.com/sharedfiles/filedetails/?id=1564026768", "https://steamuserimages-a.akamaihd.net/ugc/960854969917124348/1A32B80495D9F205E4D91C61AE309D19A44A8B92/" );
 
 		return message;
 	}
@@ -446,21 +632,74 @@ class JMWebhookModule: JMModuleBase
 	JMWebhookDiscordMessage CreateDiscordMessage( JMPlayerInstance player, string title )
 	{
 		#ifdef JM_COT_DIAG_LOGGING
-		auto trace = CF_Trace_2(this, "SetConnection").Add(player).Add(title);
+		auto trace = CF_Trace_2(this, "CreateDiscordMessage").Add(player).Add(title);
 		#endif
 
 		JMWebhookDiscordMessage message = new JMWebhookDiscordMessage;
 		auto embed = message.CreateEmbed();
-		embed.SetColor( 16766720 );
+		embed.SetColor( JMConstants.WEBHOOK_COLOR_DEFAULT );
 
-		embed.SetAuthor( "HOD Admin Tools", // HOD: branding
-			 "https://steamcommunity.com/sharedfiles/filedetails/?id=1564026768", "https://steamuserimages-a.akamaihd.net/ugc/960854969917124348/1A32B80495D9F205E4D91C61AE309D19A44A8B92/" );
+		embed.SetAuthor( "HOD Admin Tools", /* HOD: branding */ "https://steamcommunity.com/sharedfiles/filedetails/?id=1564026768", "https://steamuserimages-a.akamaihd.net/ugc/960854969917124348/1A32B80495D9F205E4D91C61AE309D19A44A8B92/" );
 
-		if ( m_ServerHostName != "" )
-			embed.AddField( "Server:", m_ServerHostName, true );
-
-		embed.AddField( title, player.FormatSteamWebhook(), m_ServerHostName != "" );
+		AddPlayerFields( embed, player, title );
 
 		return message;
+	}
+
+	// Creates an admin-action message with a custom embed color and optional target player.
+	JMWebhookDiscordMessage CreateDiscordMessageAdmin( JMPlayerInstance admin, string title, int color )
+	{
+		JMWebhookDiscordMessage message = new JMWebhookDiscordMessage;
+		auto embed = message.CreateEmbed();
+		embed.SetColor( color );
+
+		embed.SetAuthor( "HOD Admin Tools", /* HOD: branding */ "https://steamcommunity.com/sharedfiles/filedetails/?id=1564026768", "https://steamuserimages-a.akamaihd.net/ugc/960854969917124348/1A32B80495D9F205E4D91C61AE309D19A44A8B92/" );
+
+		AddPlayerFields( embed, admin, title );
+
+		return message;
+	}
+
+	//! The acting player, up front on every event: who (linked to their Steam profile), their
+	//! roles and where they stood. The caller adds what was done after these.
+	protected void AddPlayerFields( JMWebhookDiscordEmbed embed, JMPlayerInstance player, string title )
+	{
+		embed.AddField( title, player.FormatSteamWebhook(), true );
+
+		string roles = JoinRoleNames( player );
+		if ( roles != "" )
+			embed.AddField( "Role:", roles, true );
+
+		if ( player.PlayerObject )
+			embed.AddField( "Position:", FormatPosition( player.PlayerObject.GetPosition() ), true );
+	}
+
+	//! One decimal at most, so 29.999998 reads as 30.
+	static string FormatNumber( float value )
+	{
+		return ( Math.Round( value * 10 ) / 10 ).ToString();
+	}
+
+	string JoinRoleNames( JMPlayerInstance player )
+	{
+		string names = "";
+
+		array< string > roles = player.GetRoles();
+		for ( int i = 0; i < roles.Count(); i++ )
+		{
+			if ( i > 0 )
+				names += ", ";
+
+			names += roles[i];
+		}
+
+		return names;
+	}
+
+	//! "x, y, z" in whole metres - what a webhook reader can paste into the map, without the
+	//! float noise of vector.ToString().
+	static string FormatPosition( vector position )
+	{
+		return Math.Round( position[0] ).ToString() + ", " + Math.Round( position[1] ).ToString() + ", " + Math.Round( position[2] ).ToString();
 	}
 }

@@ -7,24 +7,15 @@ modded class JMObjectSpawnerForm
 	override void OnInit()
 	{
 		super.OnInit();
-		
-		if (m_ItemDataList && m_ItemDataList.GetLayoutRoot())
+
+		// HOD: adapted to COT dev/1.30 (UIActionItemList + filter row); original placed these next to the old search box
+		if (!m_ZenShowOnMapButton && m_FilterWrapper)
 		{
-			m_ItemDataList.GetLayoutRoot().Show(false);
-		}
-
-		// Panel that contains the search box + "X" button
-		Widget actions = m_SearchBox.GetLayoutRoot().GetParent();
-
-		if (!m_ZenShowOnMapButton && actions)
-		{
-			m_ZenShowOnMapButton = UIActionManager.CreateButton(actions, "#STR_ZenCOT_Map", this, "OnClick_ZenShowOnMap");
-			m_ZenShowOnMapButton.SetWidth(0.10);
-			m_ZenShowOnMapButton.SetPosition(0.44);
-
-			m_ZenDeleteAllButton = UIActionManager.CreateButton(actions, "#STR_ZenCOT_MapClear", this, "OnClick_ZenDeleteAllButton");
-			m_ZenDeleteAllButton.SetWidth(0.15);
-			m_ZenDeleteAllButton.SetPosition(0.55);
+			Widget zenRow = UIActionManager.CreateWrapSpacerCompact(m_FilterWrapper, WidgetAlignment.WA_LEFT, WidgetAlignment.WA_CENTER);
+			m_ZenShowOnMapButton = UIActionManager.CreateButton(zenRow, "#STR_ZenCOT_Map", this, "OnClick_ZenShowOnMap");
+			m_ZenShowOnMapButton.SetWidth(0.3);
+			m_ZenDeleteAllButton = UIActionManager.CreateButton(zenRow, "#STR_ZenCOT_MapClear", this, "OnClick_ZenDeleteAllButton");
+			m_ZenDeleteAllButton.SetWidth(0.4);
 			m_ZenDeleteAllButton.SetColor(COLOR_RED);
 		}
 	}
@@ -46,11 +37,8 @@ modded class JMObjectSpawnerForm
 		if (eid != UIEvent.CLICK) 
 			return;
 
-		string selected;
-		if (m_ClassList && m_ClassList.GetSelectedRow() != -1)
-			m_ClassList.GetItemText(m_ClassList.GetSelectedRow(), 0, selected);
-		else 
-		if (m_SearchBox)
+		string selected = GetCurrentSelection(); // HOD: dev/1.30 list API
+		if (selected == "" && m_SearchBox)
 			selected = m_SearchBox.GetText();
 
 		if (selected != "" && m_Module)

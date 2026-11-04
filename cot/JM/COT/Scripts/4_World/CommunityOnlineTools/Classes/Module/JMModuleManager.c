@@ -11,17 +11,14 @@ modded class JMModuleManager
 
 	void ~JMModuleManager()
 	{
+		if ( !g_Game ) return;
+
 		JMScriptInvokers.COT_ON_OPEN.Remove( SetPreventModuleBindings );
 	}
-	
-	protected override void InitModule( JMModuleBase module )
+
+	array< JMModuleBase > GetAllModules()
 	{
-		super.InitModule( module );
-		
-		if ( module.IsInherited( JMRenderableModuleBase ) )
-		{
-			m_COTModules.Insert( JMRenderableModuleBase.Cast( module ) );
-		}
+		return m_ModuleList;
 	}
 
 	array< JMRenderableModuleBase > GetCOTModules()
@@ -29,9 +26,16 @@ modded class JMModuleManager
 		return m_COTModules;
 	}
 
-	array< JMModuleBase > GetAllModules()
+	protected override void InitModule( JMModuleBase module )
 	{
-		return m_ModuleList;
+		super.InitModule( module );
+
+		module.DeclarePermissions();
+
+		if ( module.IsInherited( JMRenderableModuleBase ) )
+		{
+			m_COTModules.Insert( JMRenderableModuleBase.Cast( module ) );
+		}
 	}
 
 #ifndef DAYZ_1_26
@@ -42,9 +46,10 @@ modded class JMModuleManager
 	}
 #endif
 
-#ifndef CF_MODULE_PERMISSIONS
 	override void OnClientPermissionsUpdated()
 	{
+		super.OnClientPermissionsUpdated();
+		
 		#ifdef JM_COT_DIAG_LOGGING
 		auto trace = CF_Trace_0(this, "OnClientPermissionsUpdated");
 		#endif
@@ -54,5 +59,4 @@ modded class JMModuleManager
 			m_ModuleList[i].OnClientPermissionsUpdated();
 		}
 	}
-#endif
 }

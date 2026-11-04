@@ -22,28 +22,20 @@ class JMSpectatorCamera: JMCameraBase
 	static const int DOLLY_CAM_PATH_LIMIT = 200;
 	static const float RAISED_TIME_THRESHOLD = 1.0;
 	static const float RAISED_TIMEOUT = 5.0;
-
 	static JMSpectatorCamera s_COT_SpectatorCamera;
 	static bool s_DbgDraw;
-
 	vector linearVelocity;
 	vector angularVelocity;
-
 	vector orientation;
 	bool m_COT_IsInFreeLook;
-
 	vector m_JM_CameraPosMS;
-	
-	private float m_COT_SmoothVelDir0[1];
-	private float m_COT_SmoothVelDir1[1];
-	private float m_COT_SmoothVelDir2[1];
-	
-	private float m_COT_SmoothVelPos0[1];
-	private float m_COT_SmoothVelPos1[1];
-	private float m_COT_SmoothVelPos2[1];
-
+	protected float m_COT_SmoothVelDir0[1];
+	protected float m_COT_SmoothVelDir1[1];
+	protected float m_COT_SmoothVelDir2[1];
+	protected float m_COT_SmoothVelPos0[1];
+	protected float m_COT_SmoothVelPos1[1];
+	protected float m_COT_SmoothVelPos2[1];
 	protected vector m_COT_LastObjectPos;
-
 	vector m_COT_DollyCamPath[200];
 	int m_COT_DollyCamPathNextIdx;
 	int m_COT_DollyCamPathIdx;
@@ -63,7 +55,7 @@ class JMSpectatorCamera: JMCameraBase
 	bool m_COT_WasRaised;
 	float m_COT_RaisedTimeout;
 
-#ifdef DIAG_DEVELOPER
+#ifdef DIAG
 	float m_COT_TempFloat01;
 	float m_COT_TempFloat02;
 	float m_COT_TempFloat03;
@@ -91,7 +83,46 @@ class JMSpectatorCamera: JMCameraBase
 		if (g_Game)
 			COT_RemoveMarker();
 	}
-	
+
+	bool IsUnderRoofBuilding(DayZPlayerImplement player)
+	{
+		float hitFraction;
+		vector hitPosition, hitNormal;
+		vector from;
+		vector to;
+		Object hitObject;
+		PhxInteractionLayers collisionLayerMask = PhxInteractionLayers.ITEM_LARGE|PhxInteractionLayers.BUILDING|PhxInteractionLayers.VEHICLE;
+		
+		if (player)
+		{
+			//! if inside vehicle return immediately
+			if (player.IsInVehicle())
+				return false;
+
+			//! XXX: Somehow this doesn't work reliably?
+			IEntity floorEntity = player.PhysicsGetFloorEntity();
+			if (floorEntity && floorEntity.IsInherited(House))
+				return true;
+
+			//! Player position raycast
+			from = player.GetPosition();
+			to = from + "0 25 0";
+
+			DayZPhysics.RayCastBullet(from, to, collisionLayerMask, null, hitObject, hitPosition, hitNormal, hitFraction);
+
+			if (hitObject && hitObject.IsInherited(House))
+				return true;
+		}
+
+		//! Camera position raycast
+		from = GetPosition();
+		to = from + "0 25 0";
+		
+		DayZPhysics.RayCastBullet(from, to, collisionLayerMask, null, hitObject, hitPosition, hitNormal, hitFraction);
+
+		return hitObject && hitObject.IsInherited(House);
+	}
+
 	override void OnTargetSelected( Object target )
 	{
 		m_JM_CameraPosMS = vector.Zero;
@@ -229,7 +260,7 @@ class JMSpectatorCamera: JMCameraBase
 				vector rightShoulderToLHand = (lHandPos - rightShoulder);
 				vector rightShoulderToRHand = (rHandPos - rightShoulder);
 
-			#ifdef DIAG_DEVELOPER
+			#ifdef DIAG
 				int lookDirColor = COLOR_RED;
 				int headToRHandColor = COLOR_RED;
 				int aimDirColor = COLOR_RED;
@@ -241,7 +272,7 @@ class JMSpectatorCamera: JMCameraBase
 				float lookDot = vector.Dot(lookDir, headToRHand.Normalized());
 				if (lookDot > 0.82)
 				{
-				#ifdef DIAG_DEVELOPER
+				#ifdef DIAG
 					lookDirColor = Colors.ORANGE | 0xFF000000;
 					headToRHandColor = Colors.ORANGE | 0xFF000000;
 				#endif
@@ -249,14 +280,14 @@ class JMSpectatorCamera: JMCameraBase
 					float aimDot = vector.Dot(aimDir, rightShoulderToBarrelEnd.Normalized());
 					if (aimDot > 0.98)
 					{
-					#ifdef DIAG_DEVELOPER
+					#ifdef DIAG
 						aimDirColor = Colors.ORANGE | 0xFF000000;
 						rightShoulderToBarrelEndColor = Colors.ORANGE | 0xFF000000;
 					#endif
 
 						if (vector.Dot(aimDir, rightShoulderToRHand.Normalized()) > 0.9)
 						{
-						#ifdef DIAG_DEVELOPER
+						#ifdef DIAG
 							lookDirColor = COLOR_GREEN;
 							headToRHandColor = COLOR_GREEN;
 							aimDirColor = COLOR_GREEN;
@@ -266,7 +297,7 @@ class JMSpectatorCamera: JMCameraBase
 
 							//if (vector.Dot(aimDir, rightShoulderToLHand.Normalized()) > 0.9)
 							{
-							#ifdef DIAG_DEVELOPER
+							#ifdef DIAG
 								if (!weaponRaised && !m_COT_WasRaised)
 								{
 									if (m_COT_RaisedTimeout > RAISED_TIME_THRESHOLD)
@@ -285,7 +316,7 @@ class JMSpectatorCamera: JMCameraBase
 					}
 				}
 
-			#ifdef DIAG_DEVELOPER
+			#ifdef DIAG
 				if (s_DbgDraw)
 				{
 					Debug.DrawArrow(headPos, headPos + lookDir * 0.5, 0.1, lookDirColor, ShapeFlags.ONCE | ShapeFlags.TRANSP | ShapeFlags.ADDITIVE | ShapeFlags.NOZBUFFER);
@@ -334,7 +365,7 @@ class JMSpectatorCamera: JMCameraBase
 
 		if (!weaponRaised && m_COT_RaisedTimeout > 0.0)
 		{
-		#ifdef DIAG_DEVELOPER
+		#ifdef DIAG
 			bool wasRaised;
 			if (m_COT_RaisedTimeout > RAISED_TIME_THRESHOLD)
 				wasRaised = true;
@@ -342,7 +373,7 @@ class JMSpectatorCamera: JMCameraBase
 
 			m_COT_RaisedTimeout -= timeslice;
 
-		#ifdef DIAG_DEVELOPER
+		#ifdef DIAG
 			if (wasRaised && m_COT_RaisedTimeout <= RAISED_TIME_THRESHOLD)
 				g_Game.Chat("COT dollycam: Raised timeout", "colorFriendly");
 		#endif
@@ -494,7 +525,7 @@ class JMSpectatorCamera: JMCameraBase
 
 		vector cameraPos = GetPosition();
 
-	#ifdef DIAG_DEVELOPER
+	#ifdef DIAG
 		if (s_DbgDraw && !IsActive())
 			DrawCube(cameraPos, 0.1);
 	#endif
@@ -634,7 +665,7 @@ class JMSpectatorCamera: JMCameraBase
 
 					if (!m_COT_TargetMarker)
 					{
-					#ifdef DIAG_DEVELOPER
+					#ifdef DIAG
 						g_Game.Chat("Creating particle", "colorFriendly");
 					#endif
 
@@ -660,7 +691,7 @@ class JMSpectatorCamera: JMCameraBase
 					{
 						if (m_COT_TargetMarker.GetParent() != target)
 						{
-						#ifdef DIAG_DEVELOPER
+						#ifdef DIAG
 							g_Game.Chat("Reparenting particle", "colorFriendly");
 						#endif
 							m_COT_TargetMarker.AddAsChild(null);
@@ -669,7 +700,7 @@ class JMSpectatorCamera: JMCameraBase
 
 						if (!m_COT_TargetMarker.IsParticlePlaying())
 						{
-						#ifdef DIAG_DEVELOPER
+						#ifdef DIAG
 							g_Game.Chat("Playing particle", "colorFriendly");
 						#endif
 							m_COT_TargetMarker.PlayParticle();
@@ -748,7 +779,7 @@ class JMSpectatorCamera: JMCameraBase
 		}
 		else if (isUnderRoofBuilding)
 		{
-		#ifdef DIAG_DEVELOPER
+		#ifdef DIAG
 			if (s_DbgDraw)
 				Debug.DrawBoxEx(pos + "-0.25 0.5 -0.25", pos + "0.25 0.5 0.25", COLOR_GREEN, ShapeFlags.ONCE | ShapeFlags.TRANSP | ShapeFlags.ADDITIVE | ShapeFlags.NOZBUFFER);
 		#endif
@@ -828,14 +859,14 @@ class JMSpectatorCamera: JMCameraBase
 				{
 					m_COT_DollyCamReversing = false;
 
-				#ifdef DIAG_DEVELOPER
+				#ifdef DIAG
 					g_Game.Chat("COT dollycam: No longer reversing " + m_COT_DollyCamPathIdx + " " + m_COT_DollyCamPathNextIdx + ": Jump/climb detected", "colorAction");
 				#endif
 				}
 
 				m_COT_DollyCamJumpClimbTimeout = Math.Max(m_COT_DollyCamJumpClimbTimeout - m_COT_DollyCamPathUpdateDT, 0);
 
-			#ifdef DIAG_DEVELOPER
+			#ifdef DIAG
 				if (m_COT_DollyCamJumpClimbTimeout == 0)
 					g_Game.Chat("COT dollycam: Depleted jump/climb timeout", "colorAction");
 			#endif
@@ -855,8 +886,8 @@ class JMSpectatorCamera: JMCameraBase
 					{
 						m_COT_DollyCamJumpClimbTimeout = 5;
 
-					#ifdef DIAG_DEVELOPER
-						g_Game.Chat("COT dollycam: Jump/climb detected (pitch " + segPitch.ToString() + "°), not reversing", "colorAction");
+					#ifdef DIAG
+						g_Game.Chat("COT dollycam: Jump/climb detected (pitch " + segPitch.ToString() + " deg), not reversing", "colorAction");
 					#endif
 					}
 				}
@@ -872,7 +903,7 @@ class JMSpectatorCamera: JMCameraBase
 					{
 						--m_COT_DollyCamPathNextIdx;
 
-					#ifdef DIAG_DEVELOPER
+					#ifdef DIAG
 						g_Game.Chat("COT dollycam: Reversing " + m_COT_DollyCamPathIdx, "colorAction");
 					#endif
 					}
@@ -911,7 +942,7 @@ class JMSpectatorCamera: JMCameraBase
 					if (tooFar)
 						dollyCamSpeedMult *= 2;  //! Slow down to bridge the gap
 
-				#ifdef DIAG_DEVELOPER
+				#ifdef DIAG
 					string reason;
 					if (tooFar)
 						reason = "too far";
@@ -946,7 +977,7 @@ class JMSpectatorCamera: JMCameraBase
 				{
 					pos = m_COT_DollyCamPath[i];
 
-				#ifdef DIAG_DEVELOPER
+				#ifdef DIAG
 					if (s_DbgDraw)
 					{
 						//Debug.DrawSphere(pos, 0.01, COLOR_GREEN, ShapeFlags.ONCE | ShapeFlags.TRANSP | ShapeFlags.ADDITIVE | ShapeFlags.WIREFRAME | ShapeFlags.NOZBUFFER);
@@ -963,10 +994,10 @@ class JMSpectatorCamera: JMCameraBase
 
 					if (!isSwimming && !isOnLadder && yDiff > 0.3 && Math.AbsFloat(pitch) > 70)
 					{
-					#ifdef DIAG_DEVELOPER
+					#ifdef DIAG
 						if (m_COT_DollyCamJumpClimbTimeout == 0)
 						{
-							g_Game.Chat("COT dollycam: Jump/climb detected (pitch " + pitch.ToString() + "°)", "colorAction");
+							g_Game.Chat("COT dollycam: Jump/climb detected (pitch " + pitch.ToString() + " deg)", "colorAction");
 						}
 					#endif
 
@@ -982,7 +1013,7 @@ class JMSpectatorCamera: JMCameraBase
 						}
 					}
 
-				#ifdef DIAG_DEVELOPER
+				#ifdef DIAG
 					if (s_DbgDraw && i > 0)
 					{
 						//Debug.DrawSphere(pos, 0.01, COLOR_GREEN, ShapeFlags.ONCE | ShapeFlags.TRANSP | ShapeFlags.ADDITIVE | ShapeFlags.WIREFRAME | ShapeFlags.NOZBUFFER);
@@ -1063,7 +1094,7 @@ class JMSpectatorCamera: JMCameraBase
 
 		if (!m_COT_DollyCamReversing && m_COT_DollyCamPathNextIdx >= DOLLY_CAM_PATH_LIMIT)
 		{
-			for (i = 0; i < DOLLY_CAM_PATH_LIMIT; ++i)
+			for (i = 0; i < DOLLY_CAM_PATH_LIMIT - 1; ++i)
 			{
 				m_COT_DollyCamPath[i] = m_COT_DollyCamPath[i + 1];
 			}
@@ -1169,50 +1200,11 @@ class JMSpectatorCamera: JMCameraBase
 		}
 	}
 
-	bool IsUnderRoofBuilding(DayZPlayerImplement player)
-	{
-		float hitFraction;
-		vector hitPosition, hitNormal;
-		vector from;
-		vector to;
-		Object hitObject;
-		PhxInteractionLayers collisionLayerMask = PhxInteractionLayers.ITEM_LARGE|PhxInteractionLayers.BUILDING|PhxInteractionLayers.VEHICLE;
-		
-		if (player)
-		{
-			//! if inside vehicle return immediately
-			if (player.IsInVehicle())
-				return false;
-
-			//! XXX: Somehow this doesn't work reliably?
-			IEntity floorEntity = player.PhysicsGetFloorEntity();
-			if (floorEntity && floorEntity.IsInherited(House))
-				return true;
-
-			//! Player position raycast
-			from = player.GetPosition();
-			to = from + "0 25 0";
-
-			DayZPhysics.RayCastBullet(from, to, collisionLayerMask, null, hitObject, hitPosition, hitNormal, hitFraction);
-
-			if (hitObject && hitObject.IsInherited(House))
-				return true;
-		}
-
-		//! Camera position raycast
-		from = GetPosition();
-		to = from + "0 25 0";
-		
-		DayZPhysics.RayCastBullet(from, to, collisionLayerMask, null, hitObject, hitPosition, hitNormal, hitFraction);
-
-		return hitObject && hitObject.IsInherited(House);
-	}
-
 	void COT_RemoveMarker()
 	{
 		if (m_COT_TargetMarker)
 		{
-		#ifdef DIAG_DEVELOPER
+		#ifdef DIAG
 			g_Game.Chat("Stopping particle", "colorFriendly");
 		#endif
 			if (m_COT_TargetMarker.IsParticlePlaying())
@@ -1226,7 +1218,7 @@ class JMSpectatorCamera: JMCameraBase
 			m_COT_TargetLight = null;
 		}
 	}
-	
+
 	static Shape DrawCube(vector pos, float size = 1, int color = 0x1fff7f7f)
 	{
 		vector min = pos;

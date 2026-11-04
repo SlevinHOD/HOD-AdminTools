@@ -1,15 +1,105 @@
-#ifndef CF_WINDOWS
 class JMWindowManager
 {
-	private ref array< JMWindowBase > m_Windows;
-	private ref array< JMWindowBase > m_WindowsPendingDeletion;
-
-	private ImageWidget m_MainCursorWidget;
+	protected ref array< JMWindowBase > m_Windows;
+	protected ref array< JMWindowBase > m_WindowsPendingDeletion;
+	protected ImageWidget m_MainCursorWidget;
+	protected ref JMWindowLayoutStore m_LayoutStore;
 
 	void JMWindowManager()
 	{
 		m_Windows = new array< JMWindowBase >;
 		m_WindowsPendingDeletion = new array< JMWindowBase >;
+		m_LayoutStore = JMWindowLayoutStore.Load();
+	}
+
+	//! Saved rect for a module's window, if it was ever moved/resized. Returns
+	//! false (leaving x/y/w/h untouched) when the module has no saved entry.
+	bool TryGetSavedLayout( string moduleName, string windowName, out float x, out float y, out float w, out float h )
+	{
+		JMWindowLayoutEntry entry = m_LayoutStore.FindEntry( moduleName, windowName );
+		if ( !entry )
+			return false;
+
+		x = JMUILayout.Px( entry.X );
+		y = JMUILayout.Px( entry.Y );
+		w = JMUILayout.Px( entry.W );
+		h = JMUILayout.Px( entry.H );
+		return true;
+	}
+
+	//! Persists the window's current rect under its module's name.
+	void SaveWindowLayout( JMWindowBase window )
+	{
+		if ( !window || !window.GetModule() || !window.GetLayoutRoot() )
+			return;
+
+		float x, y, w, h;
+		window.GetPos( x, y );
+		window.GetExpandedSize( w, h );
+
+		m_LayoutStore.SetEntry( window.GetModule().GetModuleName(), window.GetName(), JMUILayout.FromPx( x ), JMUILayout.FromPx( y ), JMUILayout.FromPx( w ), JMUILayout.FromPx( h ) );
+		JMWindowLayoutStore.Save( m_LayoutStore );
+	}
+
+	JMWindowBase Get( int index )
+	{
+		return m_Windows[index];
+	}
+
+	//! Escape priority tier 2 (module menu): the frontmost visible window, if
+	//! any. BringFront() keeps m_Windows ordered front-to-back (index 0 is
+	//! last-focused), so the first visible entry is the one on top.
+	JMWindowBase GetTopUnpinnedActive()
+	{
+		foreach (JMWindowBase window: m_Windows)
+		{
+			if ( window.IsVisible() && !window.IsPinned() )
+				return window;
+		}
+		return NULL;
+	}
+
+	JMWindowBase GetTopActive()
+	{
+		foreach (JMWindowBase window: m_Windows)
+		{
+			if ( window.IsVisible() )
+				return window;
+		}
+		return NULL;
+	}
+
+	JMWindowBase GetWindowFromWidget( notnull Widget w )
+	{  
+		for ( int i = 0; i < m_Windows.Count(); i++ )
+		{
+			if ( w == m_Windows[i].GetLayoutRoot() )
+			{
+				return m_Windows[i];
+			}
+		}
+
+		return NULL;
+	}
+
+	bool HasAnyActive()
+	{
+		foreach(JMWindowBase window: m_Windows)
+		{
+			if ( window.IsVisible() )
+				return true;
+		}
+		return false;
+	}
+
+	bool HasAnyUnpinnedActive()
+	{
+		foreach(JMWindowBase window: m_Windows)
+		{
+			if ( window.IsVisible() && !window.IsPinned() )
+				return true;
+		}
+		return false;
 	}
 
 	JMWindowBase Create()
@@ -31,23 +121,41 @@ class JMWindowManager
 	void ShowAllActive()
 	{
 		foreach(JMWindowBase window: m_Windows)
+		{
+			string title = "?";
+			if (window.GetModule())
+				title = window.GetModule().GetTitle();
 			window.Show();
+		}
 	}
 
 	void HideAllActive()
 	{
 		foreach(JMWindowBase window: m_Windows)
-			window.Hide();
+		{
+			string title = "?";
+			if (window.GetModule())
+				title = window.GetModule().GetTitle();
+
+			if ( !window.IsPinned() )
+			{
+				window.Hide();
+			}
+			else
+			{
+			}
+		}
 	}
 
-	bool HasAnyActive()
+	//! Every open window re-derives its rect for the new resolution, see
+	//! JMWindowBase.OnResolutionChanged.
+	void OnResolutionChanged( float ratio )
 	{
-		foreach(JMWindowBase window: m_Windows)
+		foreach ( JMWindowBase window: m_Windows )
 		{
-			if ( window.IsVisible() )
-				return true;
+			if ( window )
+				window.OnResolutionChanged( ratio );
 		}
-		return false;
 	}
 
 	int Count()
@@ -60,16 +168,13 @@ class JMWindowManager
 		return m_WindowsPendingDeletion.Count();
 	}
 
-	JMWindowBase Get( int index )
-	{
-		return m_Windows[index];
-	}
-
 	void RemoveWindow( JMWindowBase window )
 	{
 		if ( window.GetModule() )
 		{
-			window.GetModule().SetMenuButtonColour( 1, 1, 0, 0 );
+
+			window.GetModule().SetMenuButtonColor( JMTheme.TRANSPARENT );
+			window.GetModule().OnWindowDestroyed();
 		}
 
 		int cIdx = m_Windows.Find( window );
@@ -99,7 +204,7 @@ class JMWindowManager
 	{
 		if ( window.GetModule() )
 		{
-			window.GetModule().SetMenuButtonColour( 1, 0.5, 0, 0 );
+			window.GetModule().SetMenuButtonColor( JMTheme.MENU_ACTIVE );
 		}
 
 		m_Windows.Insert( window );
@@ -127,25 +232,15 @@ class JMWindowManager
 
 		for ( int i = 0; i < m_Windows.Count(); i++ )
 		{
-			m_Windows[i].GetLayoutRoot().SetSort( m_Windows.Count() - i );
+			//! Offset above JMUILayout.SORT_WINDOW so an open window clears Expansion's map
+			//! marker sort (999). Spaced by SORT_WINDOW_STEP so the focused window (index 0,
+			//! highest) sits a clean step above the next.
+			m_Windows[i].GetLayoutRoot().SetSort( JMUILayout.SORT_WINDOW + ( m_Windows.Count() - i ) * JMUILayout.SORT_WINDOW_STEP );
 
 			m_Windows[i].Unfocus();
 		}
 
 		window.Focus();
-	}
-
-	JMWindowBase GetWindowFromWidget( notnull Widget w )
-	{  
-		for ( int i = 0; i < m_Windows.Count(); i++ )
-		{
-			if ( w == m_Windows[i].GetLayoutRoot() )
-			{
-				return m_Windows[i];
-			}
-		}
-
-		return NULL;
 	}
 
 	void DestroyAllWindows()
@@ -169,4 +264,3 @@ JMWindowManager GetCOTWindowManager()
 
 	return g_cot_WindowManager;
 }
-#endif

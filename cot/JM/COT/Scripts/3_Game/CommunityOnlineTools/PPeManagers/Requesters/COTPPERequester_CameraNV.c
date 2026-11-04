@@ -2,11 +2,9 @@ class COTPPERequester_CameraNV: PPERequester_CameraNV
 {
 	static const int COT_OFF = 0;
 	static const int COT_ON  = 1;
-
 	float m_COT_UndergroundPresenceFactorTarget;
 	float m_COT_UndergroundPresenceFactor;
 	float m_COT_UndergroundPresenceFactorVel[1];
-
 	float m_COT_TimeVisibility_Out[6] = {
 		0,
 		0.5,  //! sunrise start
@@ -15,7 +13,6 @@ class COTPPERequester_CameraNV: PPERequester_CameraNV
 		0.5,  //! sunset start
 		0
 	};
-
 	float m_COT_LastDaylightVisibility;
 	
 	override protected void SetNVMode(int mode)
@@ -24,21 +21,22 @@ class COTPPERequester_CameraNV: PPERequester_CameraNV
 		
 		switch (mode)
 		{
-			default:
-			case COT_OFF:
-				SetTargetValueColor(PostProcessEffectType.Glow,PPEGlow.PARAM_COLORIZATIONCOLOR,{0.0,0.0,0.0,0.0},PPEGlow.L_23_NVG,PPOperators.MULTIPLICATIVE);
-				SetTargetValueFloatDefault(PPEExceptions.EXPOSURE,PPEExposureNative.PARAM_INTENSITY);
-				SetTargetValueFloatDefault(PostProcessEffectType.FilmGrain,PPEFilmGrain.PARAM_SHARPNESS);
-				SetTargetValueFloatDefault(PostProcessEffectType.FilmGrain,PPEFilmGrain.PARAM_GRAINSIZE);
-				SetTargetValueFloat(PPEExceptions.NVLIGHTPARAMS,PPELightIntensityParamsNative.PARAM_LIGHT_MULT,false,1.0,PPELightIntensityParamsNative.L_0_NVG,PPOperators.HIGHEST);
-				SetTargetValueFloat(PPEExceptions.NVLIGHTPARAMS,PPELightIntensityParamsNative.PARAM_NOISE_MULT,false,0.0,PPELightIntensityParamsNative.L_1_NVG,PPOperators.HIGHEST);
-			break;
 			case COT_ON:
 				SetTargetValueColor(PostProcessEffectType.Glow,PPEGlow.PARAM_COLORIZATIONCOLOR,{1.0,1.0,1.0,1.0},PPEGlow.L_23_NVG,PPOperators.MULTIPLICATIVE);
 				m_COT_LastDaylightVisibility = -1;
 				SetTargetValueFloat(PostProcessEffectType.FilmGrain,PPEFilmGrain.PARAM_SHARPNESS,false,0.0,PPEFilmGrain.L_1_NVG,PPOperators.SET);
 				SetTargetValueFloat(PostProcessEffectType.FilmGrain,PPEFilmGrain.PARAM_GRAINSIZE,false,0.0,PPEFilmGrain.L_2_NVG,PPOperators.SET);
 				SetTargetValueFloat(PPEExceptions.NVLIGHTPARAMS,PPELightIntensityParamsNative.PARAM_LIGHT_MULT,false,0.0,PPELightIntensityParamsNative.L_0_NVG,PPOperators.HIGHEST);
+				SetTargetValueFloat(PPEExceptions.NVLIGHTPARAMS,PPELightIntensityParamsNative.PARAM_NOISE_MULT,false,0.0,PPELightIntensityParamsNative.L_1_NVG,PPOperators.HIGHEST);
+			break;
+
+			case COT_OFF:
+			default:
+				SetTargetValueColor(PostProcessEffectType.Glow,PPEGlow.PARAM_COLORIZATIONCOLOR,{0.0,0.0,0.0,0.0},PPEGlow.L_23_NVG,PPOperators.MULTIPLICATIVE);
+				SetTargetValueFloatDefault(PPEExceptions.EXPOSURE,PPEExposureNative.PARAM_INTENSITY);
+				SetTargetValueFloatDefault(PostProcessEffectType.FilmGrain,PPEFilmGrain.PARAM_SHARPNESS);
+				SetTargetValueFloatDefault(PostProcessEffectType.FilmGrain,PPEFilmGrain.PARAM_GRAINSIZE);
+				SetTargetValueFloat(PPEExceptions.NVLIGHTPARAMS,PPELightIntensityParamsNative.PARAM_LIGHT_MULT,false,1.0,PPELightIntensityParamsNative.L_0_NVG,PPOperators.HIGHEST);
 				SetTargetValueFloat(PPEExceptions.NVLIGHTPARAMS,PPELightIntensityParamsNative.PARAM_NOISE_MULT,false,0.0,PPELightIntensityParamsNative.L_1_NVG,PPOperators.HIGHEST);
 			break;
 		}
@@ -95,14 +93,7 @@ class COTPPERequester_CameraNV: PPERequester_CameraNV
 		float daylightHours = sunsetTimeStart - sunriseTimeStart;
 		float timeScale = daylightHours / 16.0;
 
-		float time[6] = {
-			Math.Max(sunriseTimeStart - 1.5 * timeScale, 0.0),
-			sunriseTimeStart,
-			sunriseTimeStart + 1.0 * timeScale,
-			sunsetTimeStart - 1.5 * timeScale,
-			sunsetTimeStart,
-			Math.Min(sunsetTimeStart + 1.0 * timeScale, 23.9833333)
-		};
+		float time[6] = { Math.Max(sunriseTimeStart - 1.5 * timeScale, 0.0), sunriseTimeStart, sunriseTimeStart + 1.0 * timeScale, sunsetTimeStart - 1.5 * timeScale, sunsetTimeStart, Math.Min(sunsetTimeStart + 1.0 * timeScale, 23.9833333) };
 
 		return Math.COT_LookUp(hour + minute / 60.0, 6, time, m_COT_TimeVisibility_Out);
 	}

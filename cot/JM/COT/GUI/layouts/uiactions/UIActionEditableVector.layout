@@ -18,7 +18,9 @@ PanelWidgetClass UIActionEditableVector {
     PanelWidgetClass action_wrapper_input
     {
      position 0 0
-     size 1 1
+     size 1 20
+     vexactsize 1
+     valign center_ref
      {
       TextWidgetClass action_label {
        size 0.3 1
@@ -36,37 +38,151 @@ PanelWidgetClass UIActionEditableVector {
        position 0.3 0
        size 0.7 1
        valign top_ref
-       Padding 0
+       Padding 10
        Margin 0
        Columns 3
        Rows 1
        {
-        EditBoxWidgetClass action_x {
+        PanelWidgetClass action_x_chrome {
+         ignorepointer 0
+         color 0 0 0 0
          position 0 0
          size 1 1
-         text "{X}"
-         "exact text" 1
-         "no focus" 0
-         font "gui/fonts/Metron"
-         style Editor
+         {
+          PanelWidgetClass action_x_fill {
+           ignorepointer 1
+           position 0 0
+           size 1 1
+           halign left_ref
+           valign top_ref
+           hexactpos 0
+           vexactpos 0
+           hexactsize 0
+           vexactsize 0
+           color 0.071 0.086 0.071 0.941
+           style COTField4Set
+          }
+          PanelWidgetClass action_x_ring {
+           ignorepointer 1
+           position 0 0
+           size 1 1
+           halign left_ref
+           valign top_ref
+           hexactpos 0
+           vexactpos 0
+           hexactsize 0
+           vexactsize 0
+           color 0.933 0.965 0.925 0.502
+           style COTField4LineSet
+          }
+          EditBoxWidgetClass action_x {
+           position 0 0
+           size 1 1
+           hexactpos 0
+           vexactpos 0
+           hexactsize 0
+           vexactsize 0
+           text "{X}"
+           "exact text" 1
+           "no focus" 0
+           font "gui/fonts/Metron"
+           style COTInput
+          }
+         }
         }
-        EditBoxWidgetClass action_y {
+        PanelWidgetClass action_y_chrome {
+         ignorepointer 0
+         color 0 0 0 0
          position 0 0
          size 1 1
-         text "{Y}"
-         "exact text" 1
-         "no focus" 0
-         font "gui/fonts/Metron"
-         style Editor
+         {
+          PanelWidgetClass action_y_fill {
+           ignorepointer 1
+           position 0 0
+           size 1 1
+           halign left_ref
+           valign top_ref
+           hexactpos 0
+           vexactpos 0
+           hexactsize 0
+           vexactsize 0
+           color 0.071 0.086 0.071 0.941
+           style COTField4Set
+          }
+          PanelWidgetClass action_y_ring {
+           ignorepointer 1
+           position 0 0
+           size 1 1
+           halign left_ref
+           valign top_ref
+           hexactpos 0
+           vexactpos 0
+           hexactsize 0
+           vexactsize 0
+           color 0.933 0.965 0.925 0.502
+           style COTField4LineSet
+          }
+          EditBoxWidgetClass action_y {
+           position 0 0
+           size 1 1
+           hexactpos 0
+           vexactpos 0
+           hexactsize 0
+           vexactsize 0
+           text "{Y}"
+           "exact text" 1
+           "no focus" 0
+           font "gui/fonts/Metron"
+           style COTInput
+          }
+         }
         }
-        EditBoxWidgetClass action_z {
+        PanelWidgetClass action_z_chrome {
+         ignorepointer 0
+         color 0 0 0 0
          position 0 0
          size 1 1
-         text "{Z}"
-         "exact text" 1
-         "no focus" 0
-         font "gui/fonts/Metron"
-         style Editor
+         {
+          PanelWidgetClass action_z_fill {
+           ignorepointer 1
+           position 0 0
+           size 1 1
+           halign left_ref
+           valign top_ref
+           hexactpos 0
+           vexactpos 0
+           hexactsize 0
+           vexactsize 0
+           color 0.071 0.086 0.071 0.941
+           style COTField4Set
+          }
+          PanelWidgetClass action_z_ring {
+           ignorepointer 1
+           position 0 0
+           size 1 1
+           halign left_ref
+           valign top_ref
+           hexactpos 0
+           vexactpos 0
+           hexactsize 0
+           vexactsize 0
+           color 0.933 0.965 0.925 0.502
+           style COTField4LineSet
+          }
+          EditBoxWidgetClass action_z {
+           position 0 0
+           size 1 1
+           hexactpos 0
+           vexactpos 0
+           hexactsize 0
+           vexactsize 0
+           text "{Z}"
+           "exact text" 1
+           "no focus" 0
+           font "gui/fonts/Metron"
+           style COTInput
+          }
+         }
         }
        }
       }
@@ -78,10 +194,10 @@ PanelWidgetClass UIActionEditableVector {
    visible 0
    clipchildren 0
    ignorepointer 0
-   color 0.1569 0.1569 0.1569 0.902
+   color 0.071 0.086 0.071 0.902
    position 0 0
    size 1 1
-   style rover_sim_colorable
+   style COTField4Set
   }
  }
 }

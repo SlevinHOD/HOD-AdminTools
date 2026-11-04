@@ -1,0 +1,30 @@
+PanelWidgetClass JMCOTFlyout {
+ visible 0
+ color 0.071 0.086 0.071 0.941
+ priority 101
+ position 0 0
+ size 300 60
+ halign left_ref
+ valign top_ref
+ hexactpos 1
+ vexactpos 1
+ hexactsize 1
+ vexactsize 1
+ style COTSurface
+ {
+  WrapSpacerWidgetClass FlyoutButtons {
+   clipchildren 0
+   color 1 1 1 0
+   position 0 0
+   size 300 60
+   halign left_ref
+   valign top_ref
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   style Empty
+   "Size To Content V" 1
+  }
+ }
+}

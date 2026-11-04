@@ -9,6 +9,8 @@ modded class MissionServer
 		
 		if ( !g_cotBase )
 			g_cotBase = new CommunityOnlineTools;
+		if ( !g_cotGame )
+			g_cotGame = g_cotBase;
 
 		CF_Modules<JMPlayerModule>.Get(m_JM_PlayerModule);
 	}
@@ -16,6 +18,33 @@ modded class MissionServer
 	void ~MissionServer()
 	{
 		g_cotBase = null;
+	}
+
+	protected bool IsCOTBanned(PlayerIdentity identity)
+	{
+		string guid = identity.GetId();
+		string steamid = identity.GetPlainId();
+		JMPlayerBan banData = JMPlayerBan.Load(guid, steamid);
+		if ( banData )
+		{
+			int banDuration = banData.BanDuration;
+			if (banDuration > 0)
+			{
+				CF_Date nowUTC = CF_Date.Now(true);
+				int currentTime = nowUTC.GetTimestamp();
+				if ( currentTime > banDuration )
+				{
+					Print("[COT] Player "+ guid +" Ban Duration Expired - Letting player Join. Reason(BAN): "+ banData.Message);
+					JMPlayerBan.DeleteBanFile(guid, steamid);
+					return false;
+				}
+			}
+
+			Print("[COT] Player "+ guid +" was kicked. Reason(BAN): "+ banData.Message);
+			return true;
+		}
+
+		return false;
 	}
 
 	override void OnMissionStart()
@@ -90,31 +119,4 @@ modded class MissionServer
 
         super.OnEvent(eventTypeId, params);
     }
-
-	protected bool IsCOTBanned(PlayerIdentity identity)
-	{
-		string guid = identity.GetId();
-		string steamid = identity.GetPlainId();
-		JMPlayerBan banData = JMPlayerBan.Load(guid, steamid);
-		if ( banData )
-		{
-			int banDuration = banData.BanDuration;
-			if (banDuration > 0)
-			{
-				CF_Date nowUTC = CF_Date.Now(true);
-				int currentTime = nowUTC.GetTimestamp();
-				if ( currentTime > banDuration )
-				{
-					Print("[COT] Player "+ guid +" Ban Duration Expired - Letting player Join. Reason(BAN): "+ banData.Message);
-					JMPlayerBan.DeleteBanFile(guid, steamid);
-					return false;
-				}
-			}
-
-			Print("[COT] Player "+ guid +" was kicked. Reason(BAN): "+ banData.Message);
-			return true;
-		}
-
-		return false;
-	}
 }

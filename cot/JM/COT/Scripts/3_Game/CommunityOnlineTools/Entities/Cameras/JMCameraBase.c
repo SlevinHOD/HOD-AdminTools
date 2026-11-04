@@ -22,23 +22,20 @@ enum JMCamera3rdPersonMode
 class JMCameraBase: Camera
 {
 	static float s_CurrentSpeed = 3.0;
-
 	float SendUpdateAccumalator = 0.0;
-	
 	bool LookFreeze;
 	bool MoveFreeze;
-
 	Object SelectedTarget;
 	vector TargetPosition;
-
 	bool m_JM_3rdPerson;
 	bool m_JM_LeftShoulder;
 	bool m_JM_IsADS;
 	bool m_JM_1stPersonADS_HideScope;
+	float m_COT_OnFrame_TimeSlice;
 
 	void JMCameraBase()
 	{
-	#ifdef DIAG_DEVELOPER
+	#ifdef DIAG
 		ErrorEx("JMCameraBase()", ErrorExSeverity.INFO);
 	#endif
 
@@ -56,7 +53,7 @@ class JMCameraBase: Camera
 
 	void ~JMCameraBase()
 	{
-	#ifdef DIAG_DEVELOPER
+	#ifdef DIAG
 		ErrorEx("~JMCameraBase()", ErrorExSeverity.INFO);
 	#endif
 
@@ -92,7 +89,6 @@ class JMCameraBase: Camera
 		SelectedTarget = target;
 	}
 
-	float m_COT_OnFrame_TimeSlice;
 	override void EOnFrame( IEntity other, float timeSlice )
 	{
 		m_COT_OnFrame_TimeSlice = timeSlice;

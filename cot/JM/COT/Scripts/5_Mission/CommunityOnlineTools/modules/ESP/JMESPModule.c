@@ -15,18 +15,18 @@ class JMESPCanvas
 		CreateCanvas();
 	}
 
-	void CreateCanvas()
-	{
-		if (!m_Canvas)
-			m_Canvas = CanvasWidget.Cast(g_Game.GetWorkspace().CreateWidgets("JM/COT/GUI/layouts/esp_canvas.layout"));
-	}
-
 	bool HasCanvas()
 	{
 		if (m_Canvas && m_Canvas.ToString() != "INVALID")
 			return true;
 
 		return false;
+	}
+
+	void CreateCanvas()
+	{
+		if (!m_Canvas)
+			m_Canvas = CanvasWidget.Cast(g_Game.GetWorkspace().CreateWidgets("JM/COT/GUI/layouts/esp_canvas.layout"));
 	}
 
 	void DrawLine(vector from, vector to, int width = 1, int color = COLOR_WHITE)
@@ -202,37 +202,82 @@ class JMESPSkeleton
 
 class JMESPModule: JMRenderableModuleBase
 {
-	private ref array< Object > m_SelectedObjects;
-	
-	private ref array< ref JMESPMeta > m_ActiveESPObjects;
+	protected ref array< Object > m_SelectedObjects;
+	protected ref array< ref JMESPMeta > m_ActiveESPObjects;
+	protected ref array< ref JMESPMeta > m_ESPToCreate;
+	protected ref array< JMESPMeta > m_ESPToDestroy;
 
-	private ref array< ref JMESPMeta > m_ESPToCreate;
-	private ref array< JMESPMeta > m_ESPToDestroy;
+	//! protected, not private: DayZ-Expansion's ExpansionESPModificationModule
+	//! (`modded class JMESPModule`) reads this via m_MappedESPObjects.Get(target).
+	//! A modded class cannot touch a private member of the class it mods.
+	protected ref map< Object, JMESPMeta > m_MappedESPObjects;
+	protected ref map< string, JMESPMeta > m_MappedObjects;
+	protected ref array< ref JMESPViewType > m_ViewTypes;
+	protected ref map<typename, JMESPViewType> m_ViewTypesByType;
 
-	private ref map< Object, JMESPMeta > m_MappedESPObjects;
+	//! Client-side per-category colour overrides. Null on a dedicated server -
+	//! nothing there draws an overlay, and it would only create an empty file.
+	protected ref JMESPSerialize m_ColourSettings;
 
-	private ref array< ref JMESPViewType > m_ViewTypes;
-	private ref map<typename, JMESPViewType> m_ViewTypesByType;
+	protected bool m_IsCreatingWidgets;
+	protected bool m_IsDestroyingWidgets;
 
-	private bool m_IsCreatingWidgets;
-	private bool m_IsDestroyingWidgets;
-	private bool m_IknowWhatIamDoing;
+	//! Held on the module, not the form or tab, since either may not exist at time of ESP widget creation/destruction
+	protected bool m_TabObjectsListDirty;
 
+	protected bool m_IknowWhatIamDoing;
+
+	//! Right-click-anything, for as long as COT's own interface is up. The button is
+	//! polled, not handled: the ESP container ignores the pointer so tags stay
+	//! clickable, and a catcher panel would swallow their clicks.
+	protected bool m_WorldMenuRightDown;
+
+	//! The construction part boxes the action menus draw into the world - see
+	//! GetConstructionPreview. Client only, made on first use.
+	protected ref JMConstructionPreview m_ConstructionPreview;
+
+	//! How far a right-click reaches. Past this it is scenery an admin is
+	//! looking at rather than something they meant to act on.
+	static const float WORLD_MENU_RANGE = 200;
+
+	//! Bounds on the one RPC that turns a client's string into a line in the
+	//! admin log and a webhook post. The real sender writes a short fixed
+	//! phrase when the ESP view is switched, so neither of these is reachable
+	//! by anything legitimate.
+	static const int LOG_MAX_LENGTH = 256;
+	static const int LOG_MIN_INTERVAL_MS = 1000;
+
+	//! How often a move or a turn is written down, per admin.
+	//! A tag drag streams ~10 positions/s; logging and posting a webhook for each would
+	//! rate limit a Discord endpoint. The move still applies every time; only the
+	//! record of it is sampled.
+	static const int MOVE_RECORD_INTERVAL_MS = 2000;
 	string Filter;
-
 	float ESPRadius;
 	int ESPUpdateTime;
-	private bool DrawPlayerSkeletonsEnabled;
+	protected bool DrawPlayerSkeletonsEnabled;
 	bool DrawPlayerSkeletonsIncludingMyself;
 	float SkeletonLineThickness = 1;
-
-	private JMESPState m_CurrentState = JMESPState.Remove;
-	private bool m_StateChanged = false;
+	protected JMESPState m_CurrentState = JMESPState.Remove;
+	protected bool m_StateChanged = false;
 	bool m_RemoveDeleted;
-
 	ref JMESPCanvas m_ESPCanvas;
+	protected JMLoadoutModule m_LoadoutModule;
 
-	private JMLoadoutModule m_LoadoutModule;
+	//! What a fireplace is refuelled with. Firewood rather than sticks: it is
+	//! the highest-energy fuel every fireplace accepts, so one stack is a fire
+	//! that stays lit long enough to be worth lighting.
+	static const string FUEL_TYPE = "Firewood";
+
+	//! How far a lock-all reaches, in metres. Wide enough to take in a whole
+	//! compound from a gate in its wall, short enough that it cannot reach a
+	//! neighbour's base across a street.
+	static const float LOCK_ALL_RADIUS = 40.0;
+
+	//! Largest selection Exec_DeleteAll records as one undo step. Each member
+	//! keeps a full snapshot (attachments and cargo included) for as long as it
+	//! stays on the stack, so an enormous selection is deliberately not kept.
+	static const int HISTORY_GROUP_MAX = 100;
 
 	void JMESPModule()
 	{
@@ -240,26 +285,416 @@ class JMESPModule: JMRenderableModuleBase
 
 		ESPUpdateTime = 5;
 
-		GetPermissionsManager().RegisterPermission( "ESP.View" );
+	}
 
-		GetPermissionsManager().RegisterPermission( "ESP.Object.SetPosition" );
-		GetPermissionsManager().RegisterPermission( "ESP.Object.SetOrientation" );
-		GetPermissionsManager().RegisterPermission( "ESP.Object.SetHealth" );
-		GetPermissionsManager().RegisterPermission( "ESP.Object.Delete" );
+	//! The objects currently tracked and drawn. The form's object list reads
+	//! this rather than walking JMESPMeta.s_JM_All: the linked list also holds
+	//! metas queued for creation and destruction, which are not on screen yet.
+	array< ref JMESPMeta > GetActiveObjects()
+	{
+		return m_ActiveESPObjects;
+	}
 
-		GetPermissionsManager().RegisterPermission( "ESP.Object.DuplicateAll" );
-		GetPermissionsManager().RegisterPermission( "ESP.Object.DeleteAll" );
-		GetPermissionsManager().RegisterPermission( "ESP.Object.MoveToCursor" );		
+	//! GetDoorIndex only means anything against a VIEW geometry component, so this fires
+	//! its own ObjIntersectView ray on PickWorldObject's axis. Returns -1 if that ray
+	//! does not land on this same building (wall gap, roof, ...).
+	protected int GetBuildingDoorIndexAtCursor( Building building )
+	{
+		if ( !building )
+			return -1;
 
-		GetPermissionsManager().RegisterPermission( "ESP.Object.BaseBuilding.Build" );
-		GetPermissionsManager().RegisterPermission( "ESP.Object.BaseBuilding.Build.MaterialsNotRequired" );
-		GetPermissionsManager().RegisterPermission( "ESP.Object.BaseBuilding.Dismantle" );
-		GetPermissionsManager().RegisterPermission( "ESP.Object.BaseBuilding.Repair" );
+		int component = GetViewComponentAtCursor( building );
 
-		GetPermissionsManager().RegisterPermission( "ESP.Object.Car.Unstuck" );
-		GetPermissionsManager().RegisterPermission( "ESP.Object.Car.Refuel" );
+		if ( component < 0 )
+			return -1;
 
-		GetPermissionsManager().RegisterPermission( "ESP.Object.Heal" );
+		return building.GetDoorIndex( component );
+	}
+
+	//! The VIEW geometry component of `target` under the pointer, -1 when the
+	//! pointer is not on it. View geometry specifically, because that is the
+	//! index space door indices and construction part selections are named in.
+	protected int GetViewComponentAtCursor( Object target )
+	{
+		if ( !target )
+			return -1;
+
+		vector from = g_Game.GetCurrentCameraPosition();
+		vector dir = g_Game.GetPointerDirection();
+
+		if ( dir.Length() < 0.01 )
+			dir = g_Game.GetCurrentCameraDirection();
+
+		vector to = from + ( dir * WORLD_MENU_RANGE );
+
+		RaycastRVParams rayInput = new RaycastRVParams( from, to, g_Game.GetPlayer() );
+		rayInput.flags = CollisionFlags.ALLOBJECTS;
+		rayInput.radius = 0.1;
+		rayInput.type = ObjIntersectView;
+
+		array< ref RaycastRVResult > results = new array< ref RaycastRVResult >;
+
+		if ( !DayZPhysics.RaycastRVProxy( rayInput, results ) )
+			return -1;
+
+		SortRaycastResultsByDistance( results, from );
+
+		foreach ( RaycastRVResult result: results )
+		{
+			Object obj;
+
+			if (result.hierLevel > 0)
+				obj = result.parent;
+			else
+				obj = result.obj;
+
+			if ( !obj )
+				continue;
+
+			EntityAI entity;
+			if ( Class.CastTo( entity, obj ) && entity.GetHierarchyRoot() )
+				obj = entity.GetHierarchyRoot();
+
+			if ( obj != target )
+				continue;
+
+			return result.component;
+		}
+
+		return -1;
+	}
+
+	vector GetChunkCenterPosition( vector center, float radiusSize, int chnkIdx, int index, int count )
+	{
+		float angle = Math.PI - ( Math.PI2 * index / count );
+
+		float distance = chnkIdx * radiusSize;
+
+		float x = distance * Math.Cos( angle );
+		float z = distance * Math.Sin( angle );
+
+		return center + Vector( x, 0, z );
+	}
+
+	[Obsolete("Use JMLockItemT<CombinationLock>::Get")]
+	static CombinationLock GetCombinationLock( Object target, int doorIndex = -1 );
+
+	//! The construction an object builds and dismantles through, if it has one.
+	//! Base building objects have one, and so do the rebuildable map buildings
+	//! (the irrigation tunnel entrance, the well, the rebuildable houses) which
+	//! are plain Buildings rather than BaseBuildingBase.
+	static ConstructionBase GetConstructionOf( Object target )
+	{
+	#ifdef DAYZ_1_29
+		BaseBuildingBase baseBuilding;
+
+		if ( !Class.CastTo( baseBuilding, target ) )
+			return NULL;
+
+		return ConstructionBase.Cast( baseBuilding.GetConstruction() );
+	#else
+		//! 1.30+
+		EntityAI entity = EntityAI.Cast( target );
+
+		if ( !entity )
+			return NULL;
+
+		return ConstructionBase.Cast( entity.GetConstructionBasic() );
+	#endif
+	}
+
+	[Obsolete("Use JMLockItemT<DigitalCodeLock>::Get")]
+	static DigitalCodeLock GetDigitalCodeLock( Object target, int doorIndex = -1 );
+
+	bool GetDrawPlayerSkeletonsEnabled()
+	{
+		return DrawPlayerSkeletonsEnabled;
+	}
+
+	protected Object GetESPObjectAtCursor()
+	{
+		vector rayStart = g_Game.GetCurrentCameraPosition();
+		vector rayEnd = rayStart + ( g_Game.GetCurrentCameraDirection() * 50 );
+		RaycastRVParams rayInput = new RaycastRVParams( rayStart, rayEnd );
+		rayInput.flags = CollisionFlags.ALLOBJECTS;
+		rayInput.radius = 0.15;
+		array< ref RaycastRVResult > results = new array< ref RaycastRVResult >;
+		if ( !DayZPhysics.RaycastRVProxy( rayInput, results ) ) return NULL;
+
+		foreach ( RaycastRVResult res: results )
+		{
+			if ( res.hierLevel > 0 )
+				continue;  //! Ignore proxies
+
+			if ( !res.obj )
+				continue;
+
+			if ( !AllowSelf( res.obj ) )
+				continue;
+
+			return res.obj;
+		}
+		return NULL;
+	}
+
+	bool GetFilterSafetyState()
+	{
+		return m_IknowWhatIamDoing;
+	}
+
+	float GetMaxRadius()
+	{
+		if (m_ViewTypesByType[JMESPViewTypeBush].View || m_ViewTypesByType[JMESPViewTypeTree].View)
+			return 300;
+
+		return 1000;
+	}
+
+	JMESPState GetState()
+	{
+		return m_CurrentState;
+	}
+
+	bool GetTabObjectsListDirty()
+	{
+		return m_TabObjectsListDirty;
+	}
+
+	void SetTabObjectsListDirty( bool dirty )
+	{
+		m_TabObjectsListDirty = dirty;
+	}
+
+	JMESPViewType GetViewType(typename type)
+	{
+		return m_ViewTypesByType[type];
+	}
+
+	array< ref JMESPViewType > GetViewTypes()
+	{
+		return m_ViewTypes;
+	}
+
+	//! Is COT on screen AND holding the mouse?
+	//! The cursor test is what makes it safe: COT hands the mouse back to the game on an
+	//! outside click while a pinned window stays, so without it an aim-down-sights
+	//! right-click would raise an unclickable menu.
+	protected bool IsCOTInterfaceOpen()
+	{
+		if ( !g_Game.GetUIManager() || !g_Game.GetUIManager().IsCursorVisible() )
+			return false;
+
+		//! A game menu of its own - inventory, the escape menu - is holding the
+		//! cursor, not COT. It gets its own right-clicks.
+		if ( g_Game.GetUIManager().GetMenu() )
+			return false;
+
+		if ( GetCommunityOnlineToolsBase() && GetCommunityOnlineToolsBase().IsOpen() )
+			return true;
+
+		if ( GetCOTWindowManager() && GetCOTWindowManager().HasAnyActive() )
+			return true;
+
+		return false;
+	}
+
+	//! Whether the thing under the cursor is COT's rather than the world's.
+	//!
+	//! Walked up the tree: the widget under the cursor is deep inside a window, and
+	//! only its ancestors say which window or tag it belongs to.
+	protected bool IsCursorOverCOTUI()
+	{
+		Widget under = GetWidgetUnderCursor();
+
+		while ( under )
+		{
+			if ( under == JMStatics.ESP_CONTAINER )
+				return true;
+
+			if ( under == JMStatics.COT_MENU )
+				return true;
+
+			if ( JMStatics.IsOverlay( under ) )
+				return true;
+
+			if ( GetCOTWindowManager() && GetCOTWindowManager().GetWindowFromWidget( under ) )
+				return true;
+
+			under = under.GetParent();
+		}
+
+		return false;
+	}
+
+	bool IsStateChangeProcessing()
+	{
+		return m_StateChanged;
+	}
+
+	// =========================================================================
+	//  Object actions: one RPC (action id, int, float) for every per-object property.
+	//  The permission is still per action, resolved server-side from the id.
+	// =========================================================================
+
+	//! Attach `className` in `slotId`, replacing whatever is already there.
+	//! Not routed through ObjectAction - see RPC.c's note on why this pair
+	//! gets its own RPC ids instead.
+	void SetAttachment( Object target, int slotId, string className )
+	{
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
+		{
+			Exec_SetAttachment( slotId, className, target, NULL );
+		} else
+		{
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write( slotId );
+			rpc.Write( className );
+			
+			JMObjectSpawnerModule objSpawnerModule = CF_Modules<JMObjectSpawnerModule>.Get();
+			rpc.Write( objSpawnerModule.m_ObjSetupMode );
+
+			rpc.Send( target, JMESPModuleRPC.SetAttachment, true, NULL );
+		}
+	}
+
+	void SetDrawPlayerSkeletonsEnabled(bool state)
+	{
+		if (!HasAccess())
+			return;
+
+		DrawPlayerSkeletonsEnabled = state;
+
+		if (!state)
+			m_ESPCanvas.Clear();
+	}
+
+	void SetFilterSafetyState(bool state)
+	{
+		m_IknowWhatIamDoing = state;
+	}
+
+	void SetHealth( float health, string zone, Object target )
+	{
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
+		{
+			Exec_SetHealth( health, zone, target, NULL );
+		} else
+		{
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write( health );
+			rpc.Send( target, JMESPModuleRPC.SetHealth, true, NULL );
+		}
+	}
+
+	void SetOrientation( vector orientation, Object target )
+	{
+		if ( !target )
+			return;
+
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
+		{
+			Exec_SetOrientation( orientation, target, NULL );
+		} else
+		{
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write( orientation );
+			rpc.Send( target, JMESPModuleRPC.SetOrientation, true, NULL );
+		}
+	}
+
+	void SetPosition( vector position, Object target )
+	{
+		if ( !target )
+			return;
+
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
+		{
+			Exec_SetPosition( position, target, NULL );
+		} else
+		{
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write( position );
+			rpc.Send( target, JMESPModuleRPC.SetPosition, true, NULL );
+		}
+	}
+
+	//! Persist a category colour edit made from the filter list. No-op on a
+	//! dedicated server, where the overrides were never loaded.
+	void SetViewTypeColour( JMESPViewType viewType, int colour )
+	{
+		if ( !viewType )
+			return;
+
+		viewType.Colour = colour;
+
+		if ( m_ColourSettings )
+			m_ColourSettings.SetColour( viewType.Permission, colour );
+	}
+
+	//! Called on both client and server as the module registers, before the mission loads.
+	override void DeclarePermissions()
+	{
+		super.DeclarePermissions();
+
+		JMPermissions.Register( JMConstants.PERM_ESP_VIEW );
+
+		//! Checked by the item-set RPC below; was never registered, so it silently fell through to the root.
+		JMPermissions.Register( JMConstants.PERM_ITEMS_CREATESET );
+
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_SETPOSITION );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_SETORIENTATION );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_SETHEALTH );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_DELETE );
+
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_DUPLICATEALL );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_DELETEALL );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_MOVETOCURSOR );
+
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_BUILD );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_BUILD_MATERIALSNOTREQUIRED );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_DISMANTLE );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_REPAIR );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_SETHEALTH );
+
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_CAR_UNSTUCK );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_CAR_REFUEL );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_CAR_LOCKWHEELS );
+
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_HEAL );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_CHANGECOLOR );
+
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_SETQUANTITY );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_SETLIQUID );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_SETCLEANNESS );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_SETFOODSTAGE );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_OPENCLOSE );
+
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_WEAPON );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_SETATTACHMENT );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_FIREPLACE );
+
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_LOCK );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_SETCODE );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_GETCODE );
+
+		//! New children of ESP.Object, so a role that already allows the parent
+		//! allows these too - an unlisted permission inherits.
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_CLEARCARGO );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_IMMOBILIZE );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_TRAP );
+		JMPermissions.Register( JMConstants.PERM_ESP_OBJECT_FLAG );
 	}
 
 #ifdef SERVER
@@ -268,63 +703,69 @@ class JMESPModule: JMRenderableModuleBase
 	}
 #endif
 
-	override bool HasAccess()
+	override void DescribeModule( JMModuleInfo info )
 	{
-		return GetPermissionsManager().HasPermission( "ESP.View" );
+		super.DescribeModule( info );
+
+		info.Title = "#STR_COT_ESP_MODULE_NAME";
+		info.WebhookTitle = "ESP Module";
+		info.Icon = "scan-eye";
+		info.Layout = "JM/COT/GUI/layouts/esp_form.layout";
+		info.Category = JMSideBarConfig.CATEGORY_WORLD;
+		info.ViewPermission = JMConstants.PERM_ESP_VIEW;
+		info.InputToggle = "UACOTToggleESP";
+		info.SetRPCRange( JMESPModuleRPC.INVALID, JMESPModuleRPC.COUNT );
+
+		info.AddWebhookType( "Log" );
+		info.AddWebhookType( "Position" );
+		info.AddWebhookType( "Orientation" );
+		info.AddWebhookType( "Health" );
+		info.AddWebhookType( "Delete" );
+		info.AddWebhookType( "BB_Build" );
+		info.AddWebhookType( "BB_Dismantle" );
+		info.AddWebhookType( "BB_Repair" );
+		info.AddWebhookType( "Vehicle_Unstuck" );
+		info.AddWebhookType( "Repair" );
+		info.AddWebhookType( "Vehicle_Refuel" );
+		info.AddWebhookType( "MakeItemSet" );
+		info.AddWebhookType( "DuplicateAll" );
+		info.AddWebhookType( "DeleteAll" );
+		info.AddWebhookType( "MoveToCursor" );
+		info.AddWebhookType( "Object" );
+		info.AddWebhookType( "SetTentOpen" );
 	}
 
-	override string GetInputToggle()
+	override void RegisterKeyMouseBindings()
 	{
-		return "UACOTToggleESP";
+		super.RegisterKeyMouseBindings();
+		Bind( new JMModuleBinding( "Input_ESP_DeleteCursor",  "UAESPModuleDeleteCursor",  true ) );
+		Bind( new JMModuleBinding( "Input_ESP_HealCursor",    "UAESPModuleHealCursor",    true ) );
+		Bind( new JMModuleBinding( "Input_ESP_MoveToCursor",  "UAESPModuleMoveToCursor",  true ) );
 	}
 
-	override string GetLayoutRoot()
+	void Input_ESP_DeleteCursor( UAInput input )
 	{
-		return "JM/COT/GUI/layouts/esp_form.layout";
+		if ( !input.LocalPress() ) return;
+		if ( !JMPermissions.Has( JMConstants.PERM_ESP_OBJECT_DELETE ) ) return;
+		Object obj = GetESPObjectAtCursor();
+		if ( obj ) DeleteObject( obj );
 	}
 
-	override string GetTitle()
+	void Input_ESP_HealCursor( UAInput input )
 	{
-		return "#STR_COT_ESP_MODULE_NAME";
-	}
-	
-	override string GetIconName()
-	{
-		return "JM\\COT\\GUI\\textures\\modules\\ESP.paa";
+		if ( !input.LocalPress() ) return;
+		if ( !JMPermissions.Has( JMConstants.PERM_ESP_OBJECT_HEAL ) ) return;
+		Object obj = GetESPObjectAtCursor();
+		if ( obj ) Heal( obj );
 	}
 
-	override bool ImageIsIcon()
+	void Input_ESP_MoveToCursor( UAInput input )
 	{
-		return true;
-	}
-
-	override bool ImageHasPath()
-	{
-		return true;
-	}
-
-	override string GetWebhookTitle()
-	{
-		return "ESP Module";
-	}
-
-	override void GetWebhookTypes( out array< string > types )
-	{
-		types.Insert( "Log" );
-		types.Insert( "Position" );
-		types.Insert( "Orientation" );
-		types.Insert( "Health" );
-		types.Insert( "Delete" );
-		types.Insert( "BB_Build" );
-		types.Insert( "BB_Dismantle" );
-		types.Insert( "BB_Repair" );
-		types.Insert( "Vehicle_Unstuck" );
-		types.Insert( "Repair" );
-		types.Insert( "Vehicle_Refuel" );
-		types.Insert( "MakeItemSet" );
-		types.Insert( "DuplicateAll" );
-		types.Insert( "DeleteAll" );
-		types.Insert( "MoveToCursor" );
+		if ( !input.LocalPress() ) return;
+		if ( !JMPermissions.Has( JMConstants.PERM_ESP_OBJECT_MOVETOCURSOR ) ) return;
+		vector contactPos;
+		if ( COT_CameraRaycast( 1000, contactPos ) )
+			MoveToCursor( contactPos );
 	}
 
 	override void OnClientPermissionsUpdated()
@@ -337,7 +778,7 @@ class JMESPModule: JMRenderableModuleBase
 
 		for ( int i = 0; i < m_ViewTypes.Count(); i++ )
 		{
-			m_ViewTypes[i].HasPermission = GetPermissionsManager().HasPermission( "ESP.View." + m_ViewTypes[i].Permission );
+			m_ViewTypes[i].HasPermission = JMPermissions.Has( JMConstants.PERM_ESP_VIEW + "." + m_ViewTypes[i].Permission );
 		}
 
 		JMESPForm form;
@@ -359,6 +800,7 @@ class JMESPModule: JMRenderableModuleBase
 		m_ESPToDestroy = new array< JMESPMeta >;
 
 		m_MappedESPObjects = new map< Object, JMESPMeta >;
+		m_MappedObjects = new map< string, JMESPMeta >;
 
 		m_ViewTypes = new array< ref JMESPViewType >;
 		m_ViewTypesByType = new map<typename, JMESPViewType>;
@@ -375,9 +817,15 @@ class JMESPModule: JMRenderableModuleBase
 				{
 					m_ViewTypes.Insert( viewType );
 					m_ViewTypesByType[espType] = viewType;
-					GetPermissionsManager().RegisterPermission( "ESP.View." + viewType.Permission );
+					JMPermissions.Register( JMConstants.PERM_ESP_VIEW + "." + viewType.Permission );
 				}
 			}
+		}
+
+		if ( !g_Game.IsDedicatedServer() )
+		{
+			m_ColourSettings = JMESPSerialize.Load();
+			m_ColourSettings.Apply( m_ViewTypes );
 		}
 	}
 
@@ -390,8 +838,11 @@ class JMESPModule: JMRenderableModuleBase
 
 		types.Insert( JMESPViewTypeCar );
 		types.Insert( JMESPViewTypeBoat );
+	#ifndef DAYZ_1_29
+		types.Insert( JMESPViewTypeMotorbike );
+	#endif
 
-		if (CommunityOnlineToolsBase.s_HypeTrain_Loco_Type)
+		if (COT.s_HypeTrain_Loco_Type)
 			types.Insert( JMESPViewTypeTrain );
 		
 		types.Insert( JMESPViewTypeArchery );
@@ -421,32 +872,73 @@ class JMESPModule: JMRenderableModuleBase
 		types.Insert( JMESPViewTypeImmovable );
 	}
 
-	array< ref JMESPViewType > GetViewTypes()
+	//! Drop one category's override. Same trick as the bulk reset: the default
+	//! only exists in the subclass constructor, so a fresh instance is how it
+	//! is read back.
+	void ResetViewTypeColour( JMESPViewType viewType )
 	{
-		return m_ViewTypes;
+		if ( !viewType )
+			return;
+
+		if ( m_ColourSettings )
+			m_ColourSettings.ClearColour( viewType.Permission );
+
+		JMESPViewType defaults = JMESPViewType.Cast( viewType.Type().Spawn() );
+
+		if ( defaults )
+			viewType.Colour = defaults.Colour;
 	}
 
-	JMESPViewType GetViewType(typename type)
+	//! Drop every override and put the constructor defaults back. Spawning a
+	//! fresh instance is how the default is read - it is only ever written in
+	//! the subclass constructor.
+	void ResetViewTypeColours()
 	{
-		return m_ViewTypesByType[type];
+		if ( m_ColourSettings )
+			m_ColourSettings.ClearColours();
+
+		foreach ( JMESPViewType viewType : m_ViewTypes )
+		{
+			JMESPViewType defaults = JMESPViewType.Cast( viewType.Type().Spawn() );
+
+			if ( defaults )
+				viewType.Colour = defaults.Colour;
+		}
 	}
 
 	bool IncludeImmovable()
 	{
-		if (m_ViewTypesByType[JMESPViewTypePlainObject].View)
-			return true;
+		JMESPViewType vt;
 
-		if (m_ViewTypesByType[JMESPViewTypeRock].View)
-			return true;
+		if ( m_ViewTypesByType.Contains( JMESPViewTypePlainObject ) )
+		{
+			vt = m_ViewTypesByType[ JMESPViewTypePlainObject ];
+			if ( vt && vt.View ) return true;
+		}
 
-		if (m_ViewTypesByType[JMESPViewTypeBush].View)
-			return true;
+		if ( m_ViewTypesByType.Contains( JMESPViewTypeRock ) )
+		{
+			vt = m_ViewTypesByType[ JMESPViewTypeRock ];
+			if ( vt && vt.View ) return true;
+		}
 
-		if (m_ViewTypesByType[JMESPViewTypeTree].View)
-			return true;
+		if ( m_ViewTypesByType.Contains( JMESPViewTypeBush ) )
+		{
+			vt = m_ViewTypesByType[ JMESPViewTypeBush ];
+			if ( vt && vt.View ) return true;
+		}
 
-		if (m_ViewTypesByType[JMESPViewTypeImmovable].View)
-			return true;
+		if ( m_ViewTypesByType.Contains( JMESPViewTypeTree ) )
+		{
+			vt = m_ViewTypesByType[ JMESPViewTypeTree ];
+			if ( vt && vt.View ) return true;
+		}
+
+		if ( m_ViewTypesByType.Contains( JMESPViewTypeImmovable ) )
+		{
+			vt = m_ViewTypesByType[ JMESPViewTypeImmovable ];
+			if ( vt && vt.View ) return true;
+		}
 
 		return false;
 	}
@@ -463,7 +955,7 @@ class JMESPModule: JMRenderableModuleBase
 
 	override void OnMPSessionFail()
 	{
-	#ifdef DIAG_DEVELOPER
+	#ifdef DIAG
 		Print("JMESPModule::OnMPSessionFail");
 	#endif
 
@@ -474,7 +966,7 @@ class JMESPModule: JMRenderableModuleBase
 
 	override void OnMPSessionEnd()
 	{
-	#ifdef DIAG_DEVELOPER
+	#ifdef DIAG
 		Print("JMESPModule::OnMPSessionEnd");
 	#endif
 
@@ -485,7 +977,7 @@ class JMESPModule: JMRenderableModuleBase
 
 	override void OnMPConnectionLost(int duration)
 	{
-	#ifdef DIAG_DEVELOPER
+	#ifdef DIAG
 		PrintFormat("JMESPModule::OnMPConnectionLost duration=%1", duration);
 	#endif
 
@@ -494,9 +986,17 @@ class JMESPModule: JMRenderableModuleBase
 
 	override void OnMissionFinish()
 	{
-	#ifdef DIAG_DEVELOPER
+	#ifdef DIAG
 		Print("JMESPModule::OnMissionFinish");
 	#endif
+
+		g_COT_ThreadESP = false;
+		g_COT_ThreadESP_Running = false;
+
+		//! @note the only reason we need to do any of the explicit cleanup below at all is because the module
+		//! will outlive the mission if ThreadESP is running and we want to avoid these resources leaking.
+		//! There will still be a few things that leak (namely the module itself and the array and map pointers)
+		//! but there's not really a way around it.
 
 		for (int j = 0; j < m_ActiveESPObjects.Count(); j++ )
 		{
@@ -504,14 +1004,16 @@ class JMESPModule: JMRenderableModuleBase
 		}
 
 		m_ActiveESPObjects.Clear();
-
-		g_COT_ThreadESP = false;
-		g_COT_ThreadESP_Running = false;
+		m_MappedESPObjects.Clear();
+		m_ViewTypes.Clear();
+		m_ViewTypesByType.Clear();
+		m_ColourSettings = null;
+		m_ESPCanvas = null;
 	}
 
 	override void OnLogout(Class sender, CF_EventArgs args)
 	{
-	#ifdef DIAG_DEVELOPER
+	#ifdef DIAG
 		Print("JMESPModule::OnLogout");
 	#endif
 
@@ -527,26 +1029,304 @@ class JMESPModule: JMRenderableModuleBase
 			m_ESPCanvas.CreateCanvas();
 	}
 
-	bool GetFilterSafetyState()
+	// =========================================================================
+	//  World context menu: the ESP tag menu over whatever the cursor points at. It only
+	//  listens while COT's interface is up, the only time the cursor is the admin's.
+	// =========================================================================
+
+	protected void UpdateWorldContextMenu()
 	{
-		return m_IknowWhatIamDoing;
+		if ( !IsMissionClient() )
+			return;
+
+		bool down = ( GetMouseState( MouseState.RIGHT ) & MB_PRESSED_MASK ) != 0;
+
+		//! The edge, not the level: a held button is a drag happening somewhere
+		//! else, not a menu being asked for again every frame.
+		if ( down == m_WorldMenuRightDown )
+			return;
+
+		m_WorldMenuRightDown = down;
+
+		if ( !down )
+			return;
+
+		if ( !IsCOTInterfaceOpen() )
+			return;
+
+		if ( !HasAccess() )
+			return;
+
+		//! A press that landed on COT's own UI belongs to whatever it landed on
+		//! - a window, the sidebar, an ESP tag, or the open menu itself, which
+		//! closes through its own handler.
+		if ( IsCursorOverCOTUI() )
+			return;
+
+		OpenWorldContextMenu();
 	}
 
-	void SetFilterSafetyState(bool state)
+	protected void OpenWorldContextMenu()
 	{
-		m_IknowWhatIamDoing = state;
+		JMESPActionMenu menu = JMESPActionMenu.Shared();
+
+		if ( !menu )
+			return;
+
+		int component;
+		Object obj = PickWorldObject( component );
+
+		if ( !obj )
+			return;
+
+		JMESPMeta meta;
+
+		if ( !CreateMetaForObject( obj, meta ) )
+			return;
+
+		meta.m_Component = GetViewComponentAtCursor( obj );
+
+		//! Static map buildings only get door actions when the click landed on a door.
+		//! GetDoorIndex needs a VIEW geometry component; PickWorldObject's is whichever
+		//! answered first (usually fire), the wrong index space, so re-pick with a
+		//! view-only ray.
+		Building building = Building.Cast( obj );
+		if ( building && meta.m_Component > -1 )
+			meta.m_DoorIndex = building.GetDoorIndex( meta.m_Component );
+		else
+			meta.m_DoorIndex = -1;
+
+		//! A construction with dozens of parts (a rebuildable building) is narrowed
+		//! to the part the click landed on; the selection name is the part's main part name.
+		string partFilter = "";
+
+		if ( GetConstructionOf( obj ) )
+		{
+			int viewComponent = GetViewComponentAtCursor( obj );
+
+			if ( viewComponent >= 0 )
+				partFilter = obj.GetActionComponentName( viewComponent, "view" );
+		}
+
+		int mx;
+		int my;
+		GetMousePos( mx, my );
+
+		menu.Open( meta, mx, my, partFilter );
 	}
 
-	float GetMaxRadius()
+	//! What the mouse is pointing at.
+	//! Uses the pointer's direction, not the camera's. Intersects fire, view (foliage),
+	//! then plain geometry in that order.
+	//! Insertion sort - result lists here are only ever a handful of entries.
+	protected void SortRaycastResultsByDistance( array< ref RaycastRVResult > results, vector from )
 	{
-		if (m_ViewTypesByType[JMESPViewTypeBush].View || m_ViewTypesByType[JMESPViewTypeTree].View)
-			return 300;
+		for ( int i = 1; i < results.Count(); i++ )
+		{
+			RaycastRVResult current = results[i];
+			float currentDist = vector.Distance( from, current.pos );
+			int j = i - 1;
 
-		return 1000;
+			while ( j >= 0 && vector.Distance( from, results[j].pos ) > currentDist )
+			{
+				results[j + 1] = results[j];
+				j--;
+			}
+
+			results[j + 1] = current;
+		}
+	}
+
+	protected Object PickWorldObject( out int outComponent )
+	{
+		outComponent = -1;
+
+		vector from = g_Game.GetCurrentCameraPosition();
+		vector dir = g_Game.GetPointerDirection();
+
+		if ( dir.Length() < 0.01 )
+			dir = g_Game.GetCurrentCameraDirection();
+
+		vector to = from + ( dir * WORLD_MENU_RANGE );
+
+		RaycastRVParams rayInput = new RaycastRVParams( from, to );
+		rayInput.flags = CollisionFlags.ALLOBJECTS;
+		rayInput.radius = 0.1;
+
+		array< ref RaycastRVResult > results = new array< ref RaycastRVResult >;
+
+		TIntArray types = { ObjIntersectFire, ObjIntersectView, ObjIntersectGeom };
+
+		foreach ( int type: types )
+		{
+			rayInput.type = type;
+
+			if ( !DayZPhysics.RaycastRVProxy( rayInput, results ) )
+				continue;
+
+			//! RaycastRVProxy does not guarantee hit order, so an overlapping
+			//! far object could otherwise win over a nearer one of the same
+			//! intersection type - sort by distance from the cursor ray origin
+			//! so the closest hit is always tried first.
+			SortRaycastResultsByDistance( results, from );
+
+			foreach ( RaycastRVResult result: results )
+			{
+				if ( result.hierLevel > 0 )
+					continue;  //! Ignore proxies
+
+				Object obj = result.obj;
+
+				if ( !obj )
+					continue;
+
+				//! An attachment or a cargo item answers the ray, but the thing
+				//! the admin pointed at is what is holding it.
+				EntityAI entity;
+				if ( Class.CastTo( entity, obj ) && entity.GetHierarchyRoot() )
+					obj = entity.GetHierarchyRoot();
+
+				if ( !AllowSelf( obj ) )
+					continue;
+
+				COT_String objType = JMESPMeta.GetObjectType( obj );
+				objType.ToLower();
+
+				if ( objType == "#particlesourceenf" )
+					continue;
+
+				outComponent = result.component;
+				return obj;
+			}
+		}
+
+		return NULL;
+	}
+
+	bool AllowSelf( notnull Object obj )
+	{
+		//! In first person the camera is inside the admin's own collision mesh, so the
+		//! ray hits self first - skip it. In third person or freecam a self-hit is deliberate
+		//! and a legitimate right-click target.
+		DayZPlayer selfPlayer = g_Game.GetPlayer();
+		if ( obj == selfPlayer && !selfPlayer.IsInThirdPerson() && !CurrentActiveCamera )
+			return false;
+
+		return true;
+	}
+
+	//! A meta for an object nobody is tracking.
+	//! Built through the view types; their permission applies but not their View toggle.
+	//! NOT put in m_MappedESPObjects: that map belongs to the ESP worker thread.
+	bool CreateMetaForObject( Object obj, out JMESPMeta meta )
+	{
+		if ( !obj )
+			return false;
+
+		JMESPMeta tracked;
+
+		//! Already tracked: use the meta the tag is using, so selecting from
+		//! the menu lights up the tag on screen and deselecting from either
+		//! place means the same thing.
+		if ( m_MappedESPObjects )
+		{
+			tracked = m_MappedESPObjects.Get( obj );
+
+			if ( tracked )
+			{
+				meta = tracked;
+				return true;
+			}
+		}
+
+		//! We use the string representation as key because we need something that survives the object
+		//! and is unique - it contains type and memory address which should suffice
+		//! since we don't need to send it over the network (only used on client).
+		//! Network ID cannot be used since it can be zero.
+		string key = obj.ToString();
+
+		JMESPMeta untracked;
+
+		if ( m_MappedObjects )
+		{
+			untracked = m_MappedObjects[key];
+
+			if ( untracked )
+			{
+				meta = untracked;
+				return true;
+			}
+		}
+
+		array< ref JMESPViewType > viewTypes = GetViewTypes();
+
+		if ( viewTypes )
+		{
+			for ( int i = 0; i < viewTypes.Count(); ++i )
+			{
+				if ( !viewTypes[i].HasPermission )
+					continue;
+
+				if ( viewTypes[i].IsValid( obj, meta ) )
+				{
+					meta.module = this;
+					break;
+				}
+			}
+		}
+
+		//! Nothing claimed it - every matching view type is denied, or it is
+		//! something no view type describes. The menu still works off the target
+		//! alone, so it gets a bare meta rather than nothing.
+		if ( !meta )
+		{
+			meta = new JMESPMeta;
+
+			meta.SetTarget( obj );
+
+			meta.module = this;
+			meta.colour = JMTheme.INK_50;
+		}
+
+		meta.m_Key = key;
+
+		if ( m_MappedObjects )
+			m_MappedObjects[key] = meta;
+
+		return true;
+	}
+
+	void RemoveMetaForObject( string key )
+	{
+		if ( m_MappedObjects )
+		{
+		#ifdef DIAG_DEVELOPER
+			int count = m_MappedObjects.Count();
+		#endif
+			m_MappedObjects.Remove( key );
+		#ifdef DIAG_DEVELOPER
+			PrintFormat("m_MappedObjects.Count() %1 -> %2", count, m_MappedObjects.Count());
+		#endif
+		}
+	}
+
+	//! Shared by every action menu, so a part previewed from the world menu and
+	//! the nodes toggled from the ESP form's menu are one set of drawings.
+	JMConstructionPreview GetConstructionPreview()
+	{
+		if ( !m_ConstructionPreview )
+			m_ConstructionPreview = new JMConstructionPreview();
+
+		return m_ConstructionPreview;
 	}
 
 	override void OnUpdate(float timeslice)
 	{
+		UpdateWorldContextMenu();
+
+		if ( m_ConstructionPreview )
+			m_ConstructionPreview.Draw();
+
 		if (!DrawPlayerSkeletonsEnabled || !m_ESPCanvas || !m_ESPCanvas.HasCanvas())
 			return;
 
@@ -595,23 +1375,12 @@ class JMESPModule: JMRenderableModuleBase
 		}
 	}
 
-	void SetDrawPlayerSkeletonsEnabled(bool state)
-	{
-		if (!HasAccess())
-			return;
+	//! Hard ceiling on a single CreateNewWidgets() pass, and the time budget it
+	//! normally stops at first - see the comment inside the method.
+	protected const int CREATE_MAX_PER_PASS = 10;
+	protected const int CREATE_BUDGET_MS = 4;
 
-		DrawPlayerSkeletonsEnabled = state;
-
-		if (!state)
-			m_ESPCanvas.Clear();
-	}
-
-	bool GetDrawPlayerSkeletonsEnabled()
-	{
-		return DrawPlayerSkeletonsEnabled;
-	}
-
-	private void CreateNewWidgets()
+	protected void CreateNewWidgets()
 	{
 		#ifdef JM_COT_ESP_DEBUG
 		#ifdef COT_DEBUGLOGS
@@ -627,10 +1396,18 @@ class JMESPModule: JMRenderableModuleBase
 
 		m_IsCreatingWidgets = true;
 
+		//! Time-budgeted, not a flat count: CreateWidgets() cost varies a lot per object
+		//! (~3.5ms average in a dense burst, sometimes far more). CREATE_MAX_PER_PASS
+		//! is still a hard ceiling in case the clock does not advance or one create
+		//! blows past the budget.
+		int startMs = g_Game.GetTime();
+
+		array<JMESPMeta> created = {};
+
 		int count = m_ESPToCreate.Count();
 
-		if (count > 10)
-			count = 10;
+		if (count > CREATE_MAX_PER_PASS)
+			count = CREATE_MAX_PER_PASS;
 
 		for ( int i = count - 1; i >= 0; i-- )
 		{
@@ -641,8 +1418,28 @@ class JMESPModule: JMRenderableModuleBase
 			m_ActiveESPObjects.Insert( meta );
 
 			m_ESPToCreate.Remove(i);
+
+			created.Insert( meta );
+
+			if ( g_Game.GetTime() - startMs >= CREATE_BUDGET_MS )
+				break;
 		}
-		
+
+		m_TabObjectsListDirty = true;
+
+		if ( created.Count() > 0 )
+			JMScriptInvokers.ESP_WIDGETS_CREATED.Invoke( created );
+
+		#ifdef JM_COT_ESP_DEBUG
+		#ifdef COT_DEBUGLOGS
+		if ( created.Count() > 0 )
+		{
+			int activeCountBeforeCreate = m_ActiveESPObjects.Count() - created.Count();
+			Print( "  JMESPModule::CreateNewWidgets - active " + activeCountBeforeCreate + " -> " + m_ActiveESPObjects.Count() + " (created " + created.Count() + " in " + ( g_Game.GetTime() - startMs ) + "ms)" );
+		}
+		#endif
+		#endif
+
 		if (m_ESPToCreate.Count() > 0)
 			g_Game.GetCallQueue(CALL_CATEGORY_SYSTEM).CallLater(CreateNewWidgets, 10, false);
 		else
@@ -655,7 +1452,7 @@ class JMESPModule: JMRenderableModuleBase
 		#endif
 	}
 
-	private void DestroyOldWidgets()
+	protected void DestroyOldWidgets()
 	{
 		#ifdef JM_COT_ESP_DEBUG
 		#ifdef COT_DEBUGLOGS
@@ -698,6 +1495,18 @@ class JMESPModule: JMRenderableModuleBase
 			m_ESPToDestroy.Remove(i);
 		}
 
+		m_TabObjectsListDirty = true;
+
+		#ifdef JM_COT_ESP_DEBUG
+		#ifdef COT_DEBUGLOGS
+		if ( count > 0 )
+		{
+			int activeCountBeforeDestroy = m_ActiveESPObjects.Count() + count;
+			Print( "  JMESPModule::DestroyOldWidgets - active " + activeCountBeforeDestroy + " -> " + m_ActiveESPObjects.Count() );
+		}
+		#endif
+		#endif
+
 		#ifdef JM_COT_ESP_DEBUG
 		Print( "  Clearing m_ESPToDestroy" );
 		#endif
@@ -733,7 +1542,7 @@ class JMESPModule: JMRenderableModuleBase
 		}
 	}
 
-	private void ChunkGetObjects(out set<Object> objects, out int totalTimeTaken)
+	protected void ChunkGetObjects(out set<Object> objects, out int totalTimeTaken)
 	{
 		if (!ESPRadius)
 			return;
@@ -770,7 +1579,7 @@ class JMESPModule: JMRenderableModuleBase
 		{
 			flags |= QueryFlags.STATIC;
 		}
-		else if (CommunityOnlineToolsBase.s_HypeTrain_Loco_Type && m_ViewTypesByType[JMESPViewTypeTrain].View)
+		else if (COT.s_HypeTrain_Loco_Type && m_ViewTypesByType[JMESPViewTypeTrain].View)
 		{
 			flags |= QueryFlags.STATIC;
 		}
@@ -849,28 +1658,6 @@ class JMESPModule: JMRenderableModuleBase
 		}
 	}
 
-	vector GetChunkCenterPosition( vector center, float radiusSize, int chnkIdx, int index, int count )
-	{
-		float angle = Math.PI - ( Math.PI2 * index / count );
-
-		float distance = chnkIdx * radiusSize;
-
-		float x = distance * Math.Cos( angle );
-		float z = distance * Math.Sin( angle );
-
-		return center + Vector( x, 0, z );
-	}
-
-	JMESPState GetState()
-	{
-		return m_CurrentState;
-	}
-
-	bool IsStateChangeProcessing()
-	{
-		return m_StateChanged;
-	}
-
 	void UpdateState( JMESPState newState )
 	{
 		m_CurrentState = newState;
@@ -917,12 +1704,33 @@ class JMESPModule: JMRenderableModuleBase
 				{
 					ChunkGetObjects( objects, totalTimeTaken );
 
+					if ( m_ViewTypesByType[JMESPViewTypePlayer].View || m_ViewTypesByType[JMESPViewTypePlayerAI].View )
+					{
+						foreach ( Man playerBase : ClientData.m_PlayerBaseList )
+						{
+							if ( playerBase )
+								objects.Insert( playerBase );
+						}
+					}
+
 					if (!g_COT_ThreadESP)
 						break;
 
 					COT_String filter = Filter;
 					bool requireAllKeywords;
 					TStringArray keywords = filter.KeywordSearch_Prepare(requireAllKeywords);
+
+					//! Hoisted out of the object loop: HasPermission/View do not change mid-scan,
+					//! and a dense area means thousands of candidates, so rebuilding this
+					//! per object would be thousands of redundant walks of every view type.
+					array< JMESPViewType > validViewTypes = new array< JMESPViewType >;
+					for ( int vt = 0; vt < m_ViewTypes.Count(); vt++ )
+					{
+						if ( m_ViewTypes[vt].HasPermission && m_ViewTypes[vt].View )
+						{
+							validViewTypes.Insert( m_ViewTypes[vt] );
+						}
+					}
 
 					for ( int i = 0; i < objects.Count(); ++i )
 					{
@@ -967,7 +1775,7 @@ class JMESPModule: JMRenderableModuleBase
 							#ifdef JM_COT_ESP_DEBUG
 							bool metaIsValid = meta.IsValid();
 							#ifdef COT_DEBUGLOGS
-							Print( "-" + meta.ClassName() + "::IsValid() = " + metaIsValid );
+							Print( "-" + meta.ClassName() + "::IsValid() = " + metaIsValid.ToString() );
 							#endif
 							if ( metaIsValid )
 							#else
@@ -979,21 +1787,12 @@ class JMESPModule: JMRenderableModuleBase
 						}
 						else
 						{
-							array< JMESPViewType > validViewTypes = new array< JMESPViewType >;
-							for ( int j = 0; j < m_ViewTypes.Count(); j++ )
-							{
-								if ( m_ViewTypes[j].HasPermission && m_ViewTypes[j].View )
-								{
-									validViewTypes.Insert( m_ViewTypes[j] );
-								}
-							}
-
-							for ( j = 0; j < validViewTypes.Count(); j++ )
+							for ( int j = 0; j < validViewTypes.Count(); j++ )
 							{
 								#ifdef JM_COT_ESP_DEBUG
 								bool viewTypeIsValid = validViewTypes[j].IsValid( obj, meta );
 								#ifdef COT_DEBUGLOGS
-								Print( "-" + validViewTypes[j].ClassName() + "::IsValid( obj = " + Object.GetDebugName( obj ) + ", out = " + meta + " ) = " + viewTypeIsValid );
+								Print( "-" + validViewTypes[j].ClassName() + "::IsValid( obj = " + Object.GetDebugName( obj ) + " ) = " + viewTypeIsValid.ToString() );
 								#endif
 								if ( viewTypeIsValid )
 								#else
@@ -1089,16 +1888,6 @@ class JMESPModule: JMRenderableModuleBase
 		Print("-ThreadESP");
 	}
 
-	override int GetRPCMin()
-	{
-		return JMESPModuleRPC.INVALID;
-	}
-
-	override int GetRPCMax()
-	{
-		return JMESPModuleRPC.COUNT;
-	}
-
 	override void OnRPC( PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx )
 	{
 		switch ( rpc_type )
@@ -1129,6 +1918,9 @@ class JMESPModule: JMRenderableModuleBase
 		case JMESPModuleRPC.BaseBuilding_Repair:
 			RPC_BaseBuilding_Repair( ctx, sender, target );
 			break;
+		case JMESPModuleRPC.BaseBuilding_SetPartHealth:
+			RPC_BaseBuilding_SetPartHealth( ctx, sender, target );
+			break;
 
 		case JMESPModuleRPC.Vehicle_Unstuck:
 			RPC_Vehicle_Unstuck( ctx, sender, target );
@@ -1153,7 +1945,86 @@ class JMESPModule: JMRenderableModuleBase
 		case JMESPModuleRPC.MoveToCursor:
 			RPC_MoveToCursor( ctx, sender, target );
 			break;
+
+		case JMESPModuleRPC.ObjectAction:
+			RPC_ObjectAction( ctx, sender, target );
+			break;
+		case JMESPModuleRPC.ObjectActionResult:
+			RPC_ObjectActionResult( ctx, sender, target );
+			break;
+
+		case JMESPModuleRPC.RecordTransformHistory:
+			RPC_RecordTransformHistory( ctx, sender, target );
+			break;
+		case JMESPModuleRPC.SetAttachment:
+			RPC_SetAttachment( ctx, sender, target );
+			break;
+		case JMESPModuleRPC.RemoveAttachment:
+			RPC_RemoveAttachment( ctx, sender, target );
+			break;
 		}
+	}
+
+	//! One push per move/rotate gesture (JMESPWidgetHandler.EndDrag), not per
+	//! throttled SetPosition/SetOrientation RPC sent during the drag itself -
+	//! those share their RPC with continuous per-frame updates and have no
+	//! per-gesture boundary of their own to record an undo step at.
+	void RecordTransformHistory( Object target, vector previousPosition, vector previousOrientation )
+	{
+		if ( !target )
+			return;
+
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
+		{
+			Exec_RecordTransformHistory( previousPosition, previousOrientation, target, NULL );
+		} else
+		{
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write( previousPosition );
+			rpc.Write( previousOrientation );
+			rpc.Send( target, JMESPModuleRPC.RecordTransformHistory, true, NULL );
+		}
+	}
+
+	protected void Exec_RecordTransformHistory( vector previousPosition, vector previousOrientation, Object target, PlayerIdentity ident )
+	{
+		if ( !target )
+			return;
+
+		JMActionHistory.Push( new JMTransformHistoryEntry( target, previousPosition, previousOrientation ), JMActionHistory.OwnerOf( ident ) );
+	}
+
+	protected void RPC_RecordTransformHistory( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	{
+		vector previousPosition;
+		vector previousOrientation;
+		if ( !ctx.Read( previousPosition ) )
+			return;
+		if ( !ctx.Read( previousOrientation ) )
+			return;
+
+	#ifdef SERVER
+		if ( !target )
+			return;
+
+		if ( !COT.IsValidWorldPosition( previousPosition ) )
+			return;
+
+		if ( !COT.IsFiniteVector( previousOrientation ) )
+			return;
+
+		if ( !senderRPC )
+			return;
+
+		JMPlayerInstance instance;
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_SETPOSITION, senderRPC, instance ) )
+			return;
+
+		Exec_RecordTransformHistory( previousPosition, previousOrientation, target, senderRPC );
+	#endif
 	}
 
 	void Log( string log )
@@ -1169,40 +2040,47 @@ class JMESPModule: JMRenderableModuleBase
 		}
 	}
 
-	private void Exec_Log( string log, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	protected void Exec_Log( string log, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
 		GetCommunityOnlineToolsBase().Log( ident, "ESP: " + log );
-		SendWebhook( "Log", instance, "Logging ESP action: " + log );
+		SendWebhookColored( "Log", instance, "Logging ESP action: " + log, JMConstants.WEBHOOK_COLOR_INFO );
 	}
 
-	private void RPC_Log( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	//! An admin's ESP view state, written to the log and the webhook.
+	//! Everything here guards against a client that is not the ESP form: unchecked, any
+	//! player could write into the audit trail and flood the Discord endpoint.
+	//! The text is capped, not rejected: the real sender writes only a few fixed phrases.
+	protected void RPC_Log( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		string log;
 		if ( !ctx.Read( log ) )
 			return;
 
-		Exec_Log( log, senderRPC, GetPermissionsManager().GetPlayer( senderRPC.GetId() ) );
+		if ( !senderRPC )
+			return;
+
+		JMPlayerInstance instance;
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_VIEW, senderRPC, instance ) )
+			return;
+
+		if ( !JMRPCThrottle.Allow( senderRPC.GetId(), "esp_log", LOG_MIN_INTERVAL_MS ) )
+			return;
+
+		if ( log.Length() > LOG_MAX_LENGTH )
+			log = log.Substring( 0, LOG_MAX_LENGTH );
+
+		Exec_Log( log, senderRPC, instance );
 	}
 
-	void SetPosition( vector position, Object target )
+	protected void Exec_SetPosition( vector position, Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
-		if ( IsMissionOffline() )
-		{
-			Exec_SetPosition( position, target, NULL );
-		} else
-		{
-			ScriptRPC rpc = new ScriptRPC();
-			rpc.Write( position );
-			rpc.Send( target, JMESPModuleRPC.SetPosition, true, NULL );
-		}
-	}
+		if ( !target )
+			return;
 
-	private void Exec_SetPosition( vector position, Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
-	{
 		Transport transport;
 		if ( Class.CastTo( transport, target ) )
 		{
-			CommunityOnlineToolsBase.ForceTransportPositionAndOrientation(transport, position, transport.GetOrientation());
+			COT.ForceTransportPositionAndOrientation(transport, position, transport.GetOrientation());
 		}
 		else
 		{
@@ -1214,20 +2092,44 @@ class JMESPModule: JMRenderableModuleBase
 				SetPosition(position, target);
 		#endif
 		}
-		
+
+		if ( !ShouldRecordMove( ident, "esp_move" ) )
+			return;
+
 		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=position value=" + position );
-		SendWebhook( "Position", instance, "Set \"" + target.GetDisplayName() + "\" (" + target.GetType() + ") position to " + position.ToString() );
+		SendWebhookColored( "Position", instance, "Set \"" + target.GetDisplayName() + "\" (" + target.GetType() + ") position to " + position.ToString(), JMConstants.WEBHOOK_COLOR_ESP );
 	}
 
-	private void RPC_SetPosition( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	//! Whether this admin's continuous transform should be written down again.
+	//!
+	//! An offline host has no identity and is never throttled - there is no
+	//! webhook and no remote sender to spend anything.
+	protected bool ShouldRecordMove( PlayerIdentity ident, string bucket )
+	{
+		if ( !ident )
+			return true;
+
+		return JMRPCThrottle.Allow( ident.GetId(), bucket, MOVE_RECORD_INTERVAL_MS );
+	}
+
+	protected void RPC_SetPosition( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		vector position;
 		if ( !ctx.Read( position ) )
 			return;
 
+		if ( !target )
+			return;
+
 	#ifdef SERVER
+		if ( !COT.IsValidWorldPosition( position ) )
+			return;
+
+		if ( !senderRPC )
+			return;
+
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.SetPosition", senderRPC, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_SETPOSITION, senderRPC, instance ) )
 			return;
 
 		Exec_SetPosition( position, target, senderRPC, instance );
@@ -1236,25 +2138,16 @@ class JMESPModule: JMRenderableModuleBase
 	#endif
 	}
 
-	void SetOrientation( vector orientation, Object target )
+	protected void Exec_SetOrientation( vector orientation, Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
-		if ( IsMissionOffline() )
-		{
-			Exec_SetOrientation( orientation, target, NULL );
-		} else
-		{
-			ScriptRPC rpc = new ScriptRPC();
-			rpc.Write( orientation );
-			rpc.Send( target, JMESPModuleRPC.SetOrientation, true, NULL );
-		}
-	}
+		if ( !target )
+			return;
 
-	private void Exec_SetOrientation( vector orientation, Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
-	{
+
 		Transport transport;
 		if ( Class.CastTo( transport, target ) )
 		{
-			CommunityOnlineToolsBase.ForceTransportPositionAndOrientation(transport, transport.GetPosition(), orientation);
+			COT.ForceTransportPositionAndOrientation(transport, transport.GetPosition(), orientation);
 		}
 		else
 		{
@@ -1267,19 +2160,31 @@ class JMESPModule: JMRenderableModuleBase
 		#endif
 		}
 
+		if ( !ShouldRecordMove( ident, "esp_turn" ) )
+			return;
+
 		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=orientation value=" + orientation );
-		SendWebhook( "Orientation", instance, "Set \"" + target.GetDisplayName() + "\" (" + target.GetType() + ") orientation to " + orientation.ToString() );
+		SendWebhookColored( "Orientation", instance, "Set \"" + target.GetDisplayName() + "\" (" + target.GetType() + ") orientation to " + orientation.ToString(), JMConstants.WEBHOOK_COLOR_ESP );
 	}
 
-	private void RPC_SetOrientation( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_SetOrientation( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		vector orientation;
 		if ( !ctx.Read( orientation ) )
 			return;
 
+		if ( !target )
+			return;
+
 	#ifdef SERVER
+		if ( !COT.IsFiniteVector( orientation ) )
+			return;
+
+		if ( !senderRPC )
+			return;
+
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.SetOrientation", senderRPC ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_SETORIENTATION, senderRPC ) )
 			return;
 
 		Exec_SetOrientation( orientation, target, senderRPC, instance );
@@ -1288,31 +2193,56 @@ class JMESPModule: JMRenderableModuleBase
 	#endif
 	}
 
-	void SetHealth( float health, string zone, Object target )
+	protected void Exec_SetHealth( float health, string zone, Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
-		if ( IsMissionOffline() )
-		{
-			Exec_SetHealth( health, zone, target, NULL );
-		} else
-		{
-			ScriptRPC rpc = new ScriptRPC();
-			rpc.Write( health );
-			rpc.Send( target, JMESPModuleRPC.SetHealth, true, NULL );
-		}
-	}
+		if ( !target )
+			return;
 
-	private void Exec_SetHealth( float health, string zone, Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
-	{
+		//! Anything health/dmg system related can segfault on plain objects
+		if ( target.IsPlainObject() )
+			return;
+
 		if ( (target.IsInherited(Man) || target.IsInherited(DayZCreature)) && !target.IsAlive() )
 			return;
 
-		target.SetHealth( health );
+		//! The number came off the wire. Clamped to what this type of entity
+		//! can actually hold, so a hand-written packet cannot hand the damage
+		//! system a negative, a NaN or a value no health bar can represent.
+		if ( !COT.IsFiniteFloat( health ) )
+			return;
+
+		float maxHealth = MiscGameplayFunctions.GetTypeMaxGlobalHealth( target.GetType() );
+
+		if ( maxHealth > 0 )
+			health = Math.Clamp( health, 0, maxHealth );
+		else
+			health = Math.Max( health, 0 );
+
+		float healthBefore;
+
+		if ( g_Game.IsServer() )
+			healthBefore = target.GetHealth( "", "" );
+		else
+			healthBefore = target.GetHealthLevelValue(target.GetHealthLevel());
+
+		COT.SetHealth( target, health );
+
+		//! Read back rather than taken from the request: redo replays what the
+		//! clamp above actually produced. A drag through many values merges into
+		//! one step (JMPropertyHistoryEntry.TryMerge).
+		float healthAfter;
+		if ( g_Game.IsServer() )
+			healthAfter = target.GetHealth( "", "" );
+		else
+			healthAfter = target.GetHealthLevelValue(target.GetHealthLevel());
+
+		JMActionHistory.Push( new JMHealthHistoryEntry( target, healthBefore, healthAfter ), JMActionHistory.OwnerOf( ident ) );
 
 		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=health value=" + health );
-		SendWebhook( "Health", instance, "Set \"" + target.GetDisplayName() + "\" (" + target.GetType() + ") health to " + health );
+		SendWebhookColored( "Health", instance, "Set \"" + target.GetDisplayName() + "\" (" + target.GetType() + ") health to " + health, JMConstants.WEBHOOK_COLOR_ESP );
 	}
 
-	private void RPC_SetHealth( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_SetHealth( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		float health;
 		if ( !ctx.Read( health ) )
@@ -1323,31 +2253,1394 @@ class JMESPModule: JMRenderableModuleBase
 		//if ( !ctx.Read( zone ) )
 			//return;
 
+		if ( !senderRPC )
+			return;
+
+		if ( !target )
+			return;
+
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.SetHealth", senderRPC, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_SETHEALTH, senderRPC, instance ) )
 			return;
 
 		Exec_SetHealth( health, zone, target, senderRPC, instance );
 	}
 
+	void RemoveAttachment( Object target, int slotId )
+	{
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
+		{
+			Exec_RemoveAttachment( slotId, target, NULL );
+		} else
+		{
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write( slotId );
+			rpc.Send( target, JMESPModuleRPC.RemoveAttachment, true, NULL );
+		}
+	}
+
+	protected void RPC_SetAttachment( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	{
+		int slotId;
+		string className;
+		if ( !ctx.Read( slotId ) || !ctx.Read( className ) )
+			return;
+			
+		JMObjectSpawnerModule objSpawnerModule = CF_Modules<JMObjectSpawnerModule>.Get();
+		if ( !ctx.Read( objSpawnerModule.m_ObjSetupMode ) )
+			return;
+
+		if ( !senderRPC )
+			return;
+
+		if ( !target )
+			return;
+
+		JMPlayerInstance instance;
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_SETATTACHMENT, senderRPC, instance ) )
+			return;
+
+		Exec_SetAttachment( slotId, className, target, senderRPC, instance );
+	}
+
+	protected void RPC_RemoveAttachment( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	{
+		int slotId;
+		if ( !ctx.Read( slotId ) )
+			return;
+
+		if ( !senderRPC )
+			return;
+
+		if ( !target )
+			return;
+
+		JMPlayerInstance instance;
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_SETATTACHMENT, senderRPC, instance ) )
+			return;
+
+		Exec_RemoveAttachment( slotId, target, senderRPC, instance );
+	}
+
+	protected void Exec_SetAttachment( int slotId, string className, Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	{
+		EntityAI entity = EntityAI.Cast( target );
+		if ( !entity || !entity.GetInventory() )
+			return;
+
+		Man player = Man.Cast( target );
+
+		EntityAI existing;
+
+		if ( slotId == InventorySlots.HANDS && player )
+			existing = player.GetEntityInHands();
+		else
+			existing = entity.GetInventory().FindAttachment( slotId );
+
+		string classBefore;
+		if ( existing )
+		{
+			classBefore = existing.GetType();
+			g_Game.ObjectDelete( existing );
+		}
+
+		string classAfter;
+		Weapon_Base weapon;
+		if ( slotId == InventorySlots.MAGAZINE && Class.CastTo( weapon, target ) )
+		{
+			if ( weapon.SpawnAmmo( className ) )
+				classAfter = className;
+		}
+		else
+		{
+			EntityAI created;
+
+			if ( slotId == InventorySlots.HANDS && player )
+				created = player.GetHumanInventory().CreateInHands( className );
+			else
+			{
+				if (entity.GetInventory().GetSlotLock(slotId))
+					entity.GetInventory().SetSlotLock(slotId, false);
+
+				created = entity.GetInventory().CreateAttachmentEx( className, slotId );
+			}
+
+			if ( created )
+			{
+				created.SetQuantity( created.GetQuantityMax() );  //! Depending on which slot this item is attached to, will set to max allowed quantity for that slot
+
+				classAfter = className;
+
+				JMObjectSpawnerModule objSpawnerModule = CF_Modules<JMObjectSpawnerModule>.Get();
+				objSpawnerModule.SetupEntityForMode( created, PlayerBase.Cast( player ), objSpawnerModule.m_ObjSetupMode );
+			}
+		}
+
+		if ( classBefore != classAfter )
+			JMActionHistory.Push( new JMAttachmentHistoryEntry( entity, slotId, classBefore, classAfter ), JMActionHistory.OwnerOf( ident ) );
+
+		GetCommunityOnlineToolsBase().Log( ident, "Set attachment " + className + " on " + entity.GetType() );
+	}
+
+	protected void Exec_RemoveAttachment( int slotId, Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	{
+		EntityAI entity = EntityAI.Cast( target );
+		if ( !entity || !entity.GetInventory() )
+			return;
+
+		Man player = Man.Cast( target );
+
+		EntityAI existing;
+
+		if ( slotId == InventorySlots.HANDS && player )
+			existing = player.GetEntityInHands();
+		else
+			existing = entity.GetInventory().FindAttachment( slotId );
+
+		if ( !existing )
+			return;
+
+		GetCommunityOnlineToolsBase().Log( ident, "Removed attachment " + existing.GetType() + " from " + entity.GetType() );
+
+		JMActionHistory.Push( new JMAttachmentHistoryEntry( entity, slotId, existing.GetType(), "" ), JMActionHistory.OwnerOf( ident ) );
+
+		g_Game.ObjectDelete( existing );
+	}
+
+	void ObjectAction( int action, int ivalue, float fvalue, Object target )
+	{
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
+		{
+			Exec_ObjectAction( action, ivalue, fvalue, target, NULL );
+		} else
+		{
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write( action );
+			rpc.Write( ivalue );
+			rpc.Write( fvalue );
+			rpc.Send( target, JMESPModuleRPC.ObjectAction, true, NULL );
+		}
+	}
+
+	//! The permission an action needs. An action with no entry here is not
+	//! dispatchable at all - a new id cannot reach an object by being forgotten
+	//! about.
+	static string PermissionForAction( int action )
+	{
+		switch ( action )
+		{
+			case JMESPObjectAction.SetQuantity:
+				return JMConstants.PERM_ESP_OBJECT_SETQUANTITY;
+			case JMESPObjectAction.SetLiquid:
+				return JMConstants.PERM_ESP_OBJECT_SETLIQUID;
+			case JMESPObjectAction.SetCleanness:
+				return JMConstants.PERM_ESP_OBJECT_SETCLEANNESS;
+			case JMESPObjectAction.SetFoodStage:
+				return JMConstants.PERM_ESP_OBJECT_SETFOODSTAGE;
+
+			case JMESPObjectAction.SetLock:
+			case JMESPObjectAction.SetLockAll:
+			case JMESPObjectAction.SetHouseDoorLocked:
+				return JMConstants.PERM_ESP_OBJECT_LOCK;
+			case JMESPObjectAction.SetCode:
+			case JMESPObjectAction.ResetCode:
+				return JMConstants.PERM_ESP_OBJECT_SETCODE;
+			case JMESPObjectAction.GetCode:
+				return JMConstants.PERM_ESP_OBJECT_GETCODE;
+
+			case JMESPObjectAction.SetJammed:
+			case JMESPObjectAction.SetChambered:
+			case JMESPObjectAction.LoadMagazine:
+				return JMConstants.PERM_ESP_OBJECT_WEAPON;
+
+			case JMESPObjectAction.SetBurning:
+			case JMESPObjectAction.FireplaceRefuel:
+			case JMESPObjectAction.SetStoneCircle:
+			case JMESPObjectAction.SetOven:
+			case JMESPObjectAction.CookAll:
+				return JMConstants.PERM_ESP_OBJECT_FIREPLACE;
+
+			case JMESPObjectAction.SetLockWheels:
+				return JMConstants.PERM_ESP_OBJECT_CAR_LOCKWHEELS;
+
+			case JMESPObjectAction.RefillCoolant:
+				return JMConstants.PERM_ESP_OBJECT_CAR_REFUEL;
+
+			case JMESPObjectAction.RepairAndFillSlots:
+				return JMConstants.PERM_ESP_OBJECT_HEAL;
+
+			case JMESPObjectAction.ChangeColor:
+				return JMConstants.PERM_ESP_OBJECT_CHANGECOLOR;
+
+			case JMESPObjectAction.SetGrenadePin:
+				return JMConstants.PERM_ESP_OBJECT_SETQUANTITY;
+
+			//! Traps have their own permission now that arming is offered
+			//! beside triggering. It is a child of ESP.Object like the rest, so
+			//! a role that allows the parent keeps working unchanged.
+			case JMESPObjectAction.TriggerTrap:
+			case JMESPObjectAction.SetTrapArmed:
+				return JMConstants.PERM_ESP_OBJECT_TRAP;
+
+			case JMESPObjectAction.SetOpen:
+			case JMESPObjectAction.SetFenceOpen:
+			case JMESPObjectAction.SetTentOpen:
+			case JMESPObjectAction.SetCarDoors:
+			case JMESPObjectAction.SetHouseDoorOpen:
+				return JMConstants.PERM_ESP_OBJECT_OPENCLOSE;
+
+			//! Setting a fluid to a fraction is the same power as filling it.
+			case JMESPObjectAction.SetFuel:
+			case JMESPObjectAction.SetCoolant:
+				return JMConstants.PERM_ESP_OBJECT_CAR_REFUEL;
+
+			case JMESPObjectAction.FillInternalMagazine:
+				return JMConstants.PERM_ESP_OBJECT_WEAPON;
+
+			case JMESPObjectAction.BuildAll:
+				return JMConstants.PERM_ESP_OBJECT_BASEBUILDING_BUILD;
+
+			case JMESPObjectAction.DismantleAll:
+				return JMConstants.PERM_ESP_OBJECT_BASEBUILDING_DISMANTLE;
+
+			case JMESPObjectAction.RepairAll:
+				return JMConstants.PERM_ESP_OBJECT_BASEBUILDING_REPAIR;
+
+			case JMESPObjectAction.SetFlagRaised:
+				return JMConstants.PERM_ESP_OBJECT_FLAG;
+
+			case JMESPObjectAction.ClearCargo:
+				return JMConstants.PERM_ESP_OBJECT_CLEARCARGO;
+
+			case JMESPObjectAction.SetImmobilized:
+				return JMConstants.PERM_ESP_OBJECT_IMMOBILIZE;
+		}
+
+		return "";
+	}
+
+	protected void Exec_ObjectAction( int action, int ivalue, float fvalue, Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	{
+		if ( !target )
+			return;
+
+		bool bvalue = ivalue;
+
+		ItemBase item = ItemBase.Cast( target );
+
+		string logValue = ivalue.ToString();
+
+		switch ( action )
+		{
+			case JMESPObjectAction.SetQuantity:
+				if ( !item )
+					return;
+				if ( !COT.IsFiniteFloat( fvalue ) )
+					return;
+				//! Same reasoning as SetHealth: the value is a client's, and
+				//! an item's own maximum is the only bound that means anything.
+				fvalue = Math.Clamp( fvalue, 0, item.GetQuantityMax() );
+				float quantityBefore = item.GetQuantity();
+				item.SetQuantity( fvalue, false );
+				JMActionHistory.Push( new JMQuantityHistoryEntry( item, quantityBefore, item.GetQuantity() ), JMActionHistory.OwnerOf( ident ) );
+				logValue = fvalue.ToString();
+				break;
+
+			case JMESPObjectAction.SetLiquid:
+				if ( !item )
+					return;
+				//! Liquid types are single bits by engine rule - "0 or any
+				//! power of two" - so a negative, or a value with more than one
+				//! bit set, is not a liquid the game defines.
+				if ( ivalue < 0 || ( ivalue & ( ivalue - 1 ) ) != 0 )
+					return;
+				int liquidBefore = item.GetLiquidType();
+				item.SetLiquidType( ivalue );
+				JMActionHistory.Push( new JMLiquidHistoryEntry( item, liquidBefore, item.GetLiquidType() ), JMActionHistory.OwnerOf( ident ) );
+				break;
+
+			case JMESPObjectAction.SetCleanness:
+				if ( !item )
+					return;
+				//! Cleanness is a flag, not a scale.
+				if ( ivalue < 0 || ivalue > 1 )
+					return;
+				item.SetCleanness( ivalue );
+				break;
+
+			case JMESPObjectAction.SetFoodStage:
+				Edible_Base edible = Edible_Base.Cast( target );
+				if ( !edible )
+					return;
+				//! A stage outside the enum is not a food state the item has a
+				//! transition for.
+				if ( ivalue < FoodStageType.NONE || ivalue >= FoodStageType.COUNT )
+					return;
+				edible.ChangeFoodStage( ivalue );
+				break;
+
+			case JMESPObjectAction.SetOpen:
+				Exec_SetOpen( target, ivalue, ident, instance );
+				break;
+
+			case JMESPObjectAction.SetLock:
+				if ( !item || !item.COT_SetLockState( bvalue ) )
+					return;
+				break;
+
+			case JMESPObjectAction.SetCode:
+				if ( !item || !item.COT_SetCode( ivalue.ToString(), GetPlayerObjectByIdentity( ident ) ) )
+					return;
+				break;
+
+			case JMESPObjectAction.GetCode:
+				Exec_GetCode( target, ident );
+				return;
+
+			case JMESPObjectAction.ResetCode:
+				if ( !item || !item.COT_ResetCode() )
+					return;
+				break;
+
+			case JMESPObjectAction.SetJammed:
+				if ( !Exec_SetJammed( target, ivalue ) )
+					return;
+				break;
+
+			case JMESPObjectAction.SetChambered:
+				if ( !Exec_SetChambered( target, ivalue ) )
+					return;
+				break;
+
+			case JMESPObjectAction.LoadMagazine:
+				if ( !Exec_LoadMagazine( target ) )
+					return;
+				break;
+
+			case JMESPObjectAction.SetBurning:
+				if ( !Exec_SetBurning( target, ivalue ) )
+					return;
+				break;
+
+			case JMESPObjectAction.FireplaceRefuel:
+				if ( !Exec_FireplaceRefuel( target ) )
+					return;
+				break;
+
+			case JMESPObjectAction.SetStoneCircle:
+				if ( !Exec_SetStoneCircle( target, ivalue ) )
+					return;
+				break;
+
+			case JMESPObjectAction.SetOven:
+				if ( !Exec_SetOven( target, ivalue ) )
+					return;
+				break;
+
+			case JMESPObjectAction.CookAll:
+				logValue = Exec_CookAll( target ).ToString();
+				break;
+
+			case JMESPObjectAction.SetLockAll:
+				logValue = Exec_SetLockAll( target, ivalue ).ToString();
+				break;
+
+			case JMESPObjectAction.SetLockWheels:
+				Exec_SetLockWheels( target, ivalue, ident, instance );
+				return;
+
+			case JMESPObjectAction.RefillCoolant:
+				Exec_RefillCoolant( target, ident, instance );
+				return;
+
+			case JMESPObjectAction.RepairAndFillSlots:
+				Exec_RepairAndFillSlots( target, ident, instance );
+				return;
+
+			case JMESPObjectAction.ChangeColor:
+				Exec_ChangeColor( target, ivalue, ident, instance );
+				return;
+
+			case JMESPObjectAction.SetGrenadePin:
+				Exec_SetGrenadePin( target, ivalue, ident, instance );
+				return;
+
+			case JMESPObjectAction.TriggerTrap:
+				Exec_TriggerTrap( target, ident, instance );
+				return;
+
+			case JMESPObjectAction.SetFenceOpen:
+				Exec_SetFenceOpen( target, ivalue, ident, instance );
+				return;
+
+			case JMESPObjectAction.SetTentOpen:
+				Exec_SetTentOpen( target, ivalue, ident, instance );
+				return;
+
+			case JMESPObjectAction.SetCarDoors:
+				Exec_SetCarDoors( target, ivalue, ident, instance );
+				return;
+
+			case JMESPObjectAction.SetHouseDoorOpen:
+				Exec_SetHouseDoorOpen( target, ivalue, fvalue, ident, instance );
+				return;
+
+			case JMESPObjectAction.SetHouseDoorLocked:
+				Exec_SetHouseDoorLocked( target, ivalue, fvalue, ident, instance );
+				return;
+
+			case JMESPObjectAction.SetFuel:
+				float fuelBefore = COT.GetFuel01( target );
+				COT.SetFuel01( target, fvalue );
+				PushFuelHistory( target, fuelBefore, ident );
+				logValue = fvalue.ToString();
+				break;
+
+			case JMESPObjectAction.SetCoolant:
+				COT.SetCoolant01( target, fvalue );
+				logValue = fvalue.ToString();
+				break;
+
+			case JMESPObjectAction.FillInternalMagazine:
+				if ( !Exec_FillInternalMagazine( target ) )
+					return;
+				break;
+
+			case JMESPObjectAction.BuildAll:
+				logValue = Exec_BuildAll( target, ident, instance ).ToString();
+				break;
+
+			case JMESPObjectAction.DismantleAll:
+				logValue = Exec_DismantleAll( target, ident, instance ).ToString();
+				break;
+
+			case JMESPObjectAction.RepairAll:
+				logValue = Exec_RepairAll( target, ident, instance ).ToString();
+				break;
+
+			case JMESPObjectAction.SetFlagRaised:
+				if ( !Exec_SetFlagRaised( target, fvalue ) )
+					return;
+				logValue = fvalue.ToString();
+				break;
+
+			case JMESPObjectAction.ClearCargo:
+				logValue = COT.ClearCargo( EntityAI.Cast( target ) ).ToString();
+				break;
+
+			case JMESPObjectAction.SetImmobilized:
+				if ( !Exec_SetImmobilized( target, ivalue ) )
+					return;
+				break;
+
+			case JMESPObjectAction.SetTrapArmed:
+				if ( !Exec_SetTrapArmed( target, ivalue, ident ) )
+					return;
+				break;
+
+			default:
+				return;
+		}
+
+		string actionStr = typename.EnumToString(JMESPObjectAction, action);
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=" + actionStr + " value=" + logValue );
+		SendWebhookColored( "Object", instance, "Set \"" + target.GetDisplayName() + "\" (" + target.GetType() + ") action " + actionStr + " to " + logValue, JMConstants.WEBHOOK_COLOR_ESP );
+	}
+
+	protected void Exec_SetLockWheels( Object target, int ivalue, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		COT.SetLockWheels( target, ivalue != 0 );
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=lockwheels state=" + ivalue );
+		SendWebhookColored( "SetLockWheels", instance, "Wheels lock state set to " + ivalue + " for " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void Exec_RefillCoolant( Object target, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		COT.RefillCoolant( target );
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=refillcoolant" );
+		SendWebhookColored( "RefillCoolant", instance, "Refilled coolant for " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void Exec_RepairAndFillSlots( Object target, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		EntityAI entity = EntityAI.Cast( target );
+		if ( !entity )
+			return;
+
+		bool includeAttachments = true;
+		bool includeCargo = true;
+
+		PlayerBase player;
+		if (Class.CastTo(player, target))
+		{
+			includeAttachments = JMPermissions.Has( JMConstants.PERM_PLAYER_HEAL_ATTACHMENTS, ident );
+			includeCargo = JMPermissions.Has( JMConstants.PERM_PLAYER_HEAL_CARGO, ident );
+		}
+
+		COT.HealEntityRecursive( entity, includeAttachments, includeCargo );
+		COT.Refuel( entity );
+		GetCommunityOnlineToolsBase().SpawnCompatibleAttachmentsWithColor( entity, NULL, 0, "" );
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=repairandfill" );
+		SendWebhookColored( "RepairAndFillSlots", instance, "Repaired and filled slots for " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void Exec_ChangeColor( Object target, int colorIndex, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		EntityAI entity = EntityAI.Cast( target );
+		if ( !entity )
+			return;
+
+		// Color is a whole-object property - paint the thing a sub-part
+		// belongs to, never the sub-part the menu happened to be opened on.
+		if ( entity.GetHierarchyRoot() )
+			entity = EntityAI.Cast( entity.GetHierarchyRoot() );
+
+		string color = JMObjectSpawnerModule.GetColorTokenAt( colorIndex );
+		if ( color == "" )
+			return;
+
+		string label = target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition();
+
+		GetCommunityOnlineToolsBase().RecolorEntityAndAttachments( entity, NULL, color, 0 );
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=changecolor color=" + color );
+		SendWebhookColored( "ChangeColor", instance, "Changed color to " + color + " for " + label, JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void Exec_SetGrenadePin( Object target, int ivalue, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		Grenade_Base grenade = Grenade_Base.Cast( target );
+		if ( !grenade )
+			return;
+
+		if ( ivalue != 0 )
+			grenade.Pin();
+		else
+			grenade.Unpin();
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=grenadepin state=" + ivalue );
+		SendWebhookColored( "SetGrenadePin", instance, "Grenade pin state set to " + ivalue + " for " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void Exec_TriggerTrap( Object target, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		TrapBase trap = TrapBase.Cast( target );
+		if ( !trap )
+			return;
+
+		trap.OnSteppedOn( NULL );
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=triggertrap" );
+		SendWebhookColored( "TriggerTrap", instance, "Triggered trap " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void Exec_SetFenceOpen( Object target, int ivalue, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		Fence fence = Fence.Cast( target );
+		if ( !fence || !fence.HasHinges() )
+			return;
+
+		ItemBase lockItem = JMLockItem.Get( target );
+
+		bool lockStateChanged;
+		if ( lockItem )
+			lockStateChanged = lockItem.COT_SetLockState( !ivalue );  //! Unlocks the gate on open, closes & locks the gate automatically on close
+
+		if ( ivalue != 0 && fence.CanOpenFence() )
+			fence.OpenFence();
+		else if ( !lockStateChanged && fence.CanCloseFence() )
+			fence.CloseFence();
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=fenceopen state=" + ivalue );
+		SendWebhookColored( "SetFenceOpen", instance, "Fence open state set to " + ivalue + " for " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void Exec_SetHouseDoorOpen( Object target, int ivalue, float fvalue, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		Building house = Building.Cast( target );
+		if ( !house )
+			return;
+
+		int doorIndex = fvalue;
+
+		if ( doorIndex < 0 || doorIndex >= house.GetDoorCount() )
+			return;
+
+		ItemBase lockItem = JMLockItem.Get( target, doorIndex );
+
+		bool lockStateChanged;
+		if ( lockItem )
+			lockStateChanged = lockItem.COT_SetLockState( !ivalue );  //! Unlocks the door on open, closes & locks the door automatically on close
+
+		if ( ivalue != 0 )
+		{
+			if ( house.IsDoorLocked( doorIndex ) )
+				house.UnlockDoor( doorIndex );
+
+			house.OpenDoor( doorIndex );
+		}
+		else if ( !lockStateChanged )
+		{
+			house.CloseDoor( doorIndex );
+		}
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=housedooropen door=" + doorIndex + " state=" + ivalue );
+		SendWebhookColored( "SetHouseDoorOpen", instance, "Door " + doorIndex + " open state set to " + ivalue + " for " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void Exec_SetHouseDoorLocked( Object target, int ivalue, float fvalue, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		Building house = Building.Cast( target );
+		if ( !house )
+			return;
+
+		int doorIndex = fvalue;
+
+		if ( doorIndex < 0 || doorIndex >= house.GetDoorCount() )
+			return;
+
+		ItemBase lockItem = JMLockItem.Get( target, doorIndex );
+
+		if ( lockItem )
+			lockItem.COT_SetLockState( ivalue );
+		else if ( ivalue != 0 )
+			house.LockDoor( doorIndex );
+		else
+			house.UnlockDoor( doorIndex );
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=housedoorlocked door=" + doorIndex + " state=" + ivalue );
+		SendWebhookColored( "SetHouseDoorLocked", instance, "Door " + doorIndex + " locked state set to " + ivalue + " for " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void Exec_SetTentOpen( Object target, int ivalue, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		TentBase tent = TentBase.Cast( target );
+		if ( !tent )
+			return;
+
+		int count = tent.COT_ToggleAnimations( ivalue );
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=tentopen state=" + ivalue + " count=" + count );
+		SendWebhookColored( "SetTentOpen", instance, "Tent open state set to " + ivalue + " for " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void Exec_SetOpen( Object target, int ivalue, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		ItemBase item = ItemBase.Cast( target );
+		if ( !item )
+			return;
+
+		ItemBase lockItem = JMLockItem.Get( target );
+
+		bool lockStateChanged;
+		if ( lockItem )
+			lockStateChanged = lockItem.COT_SetLockState( !ivalue );  //! Unlocks the item on open, closes & locks the item automatically on close
+
+		if ( ivalue != 0 )
+		#ifdef DZ_Expansion_BaseBuilding
+			item.Expansion_Open( "*" );
+		#else
+			item.Open();
+		#endif
+		else if ( !lockStateChanged )
+		#ifdef DZ_Expansion_BaseBuilding
+			item.Expansion_Close( "*" );
+		#else
+			item.Close();
+		#endif
+	}
+
+	protected void Exec_SetCarDoors( Object target, int ivalue, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		CarScript car = CarScript.Cast( target );
+		if ( !car )
+			return;
+
+		car.COT_SetCarDoors( ivalue != 0 );
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=cardoors state=" + ivalue );
+		SendWebhookColored( "SetCarDoors", instance, "Car doors open state set to " + ivalue + " for " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	//! Load the magazine a weapon carries INSIDE itself.
+	//!
+	//! Separate from LoadMagazine, which attaches one: a gun is one or the
+	//! other, and the two rows never both apply to the same weapon.
+	protected bool Exec_FillInternalMagazine( Object target )
+	{
+		Weapon_Base weapon;
+
+		if ( !Class.CastTo( weapon, target ) )
+			return false;
+
+		if ( !weapon.HasInternalMagazine( -1 ) )
+			return false;
+
+		return weapon.FillInnerMagazine( "", WeaponWithAmmoFlags.CHAMBER );
+	}
+
+	//! Build every part that can be built right now.
+	//! Only parts the construction reports as buildable are passed in; COT_BuildParts
+	//! walks required parts itself, so ask for the wall, not its base.
+	protected int Exec_BuildAll( Object target, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		ConstructionBase construction = GetConstructionOf( target );
+
+		if ( !construction )
+			return 0;
+
+		bool requireMaterials = !JMPermissions.Has( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_BUILD_MATERIALSNOTREQUIRED, ident, instance );
+
+		map< string, ref JMConstructionPartData > parts = new map< string, ref JMConstructionPartData >;
+		construction.COT_GetParts( parts, requireMaterials );
+
+		array< ConstructionPart > partsOrdered = construction.GetConstructionPartArray();
+
+		TStringArray names = {};
+		TStringArray other = {};
+
+		foreach ( ConstructionPart part: partsOrdered )
+		{
+			string partName = part.GetPartName();
+			JMConstructionPartData partData = parts[partName];
+			if ( partData )
+			{
+				string partNameLower = partName;
+				partNameLower.ToLower();
+
+				bool isDoor = partNameLower.Contains( "door" );
+
+				if ( isDoor && partNameLower.Contains( "barricade" ) )
+					continue;  //! Don't build door barricades, prefer actual doors
+
+				if ( partData.m_State == JMConstructionPartState.CAN_BUILD || partData.m_State == JMConstructionPartState.REQUIRED_PART_NOT_BUILT )
+				{
+					//! Reverse order because construction parts are usually ordered with highest tier last
+					if ( isDoor )
+						names.InsertAt( partName, 0 );
+					else
+						other.InsertAt( partName, 0 );
+				}
+
+			#ifdef DIAG_DEVELOPER
+				PrintFormat("%1 %2", partName, typename.EnumToString(JMConstructionPartState, partData.m_State));
+			#endif
+			}
+		}
+
+		names.InsertAll( other );  //! Prefer doors by inserting everything else after
+
+		if ( names.Count() == 0 )
+			return 0;
+
+		PlayerBase player;
+		Class.CastTo( player, GetPlayerObjectByIdentity( ident ) );
+
+		construction.COT_BuildParts( names, player, requireMaterials );
+
+		int partsBuiltCount = construction.COT_GetBuiltParts().Count();
+
+		SendWebhookColored( "BB_Build", instance, "Built every buildable part (" + partsBuiltCount + ") of \"" + target.GetDisplayName() + "\" (" + target.GetType() + ")", JMConstants.WEBHOOK_COLOR_ESP );
+
+		return partsBuiltCount;
+	}
+
+	//! Take the whole construction apart, base part included - which is what
+	//! dismantling a base building object down to nothing means, so the entity
+	//! itself goes with the last part.
+	protected int Exec_DismantleAll( Object target, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		ConstructionBase construction = GetConstructionOf( target );
+
+		if ( !construction )
+			return 0;
+
+		map< string, ref JMConstructionPartData > parts = new map< string, ref JMConstructionPartData >;
+		construction.COT_GetParts( parts, false );
+
+		TStringArray names = new TStringArray;
+
+		foreach (string partName, JMConstructionPartData part: parts )
+		{
+			if ( part.m_State == JMConstructionPartState.BUILT )
+				names.Insert( partName );
+		}
+
+		if ( names.Count() == 0 )
+			return 0;
+
+		PlayerBase player;
+		Class.CastTo( player, GetPlayerObjectByIdentity( ident ) );
+
+		construction.COT_DismantleParts( names, player );
+
+		SendWebhookColored( "BB_Dismantle", instance, "Dismantled every built part (" + names.Count() + ") of \"" + target.GetDisplayName() + "\" (" + target.GetType() + ")", JMConstants.WEBHOOK_COLOR_WARNING );
+
+		return names.Count();
+	}
+
+	//! Heal every already-built construction part of a base building object.
+	protected int Exec_RepairAll( Object target, PlayerIdentity ident = NULL, JMPlayerInstance instance = NULL )
+	{
+		ConstructionBase construction = GetConstructionOf( target );
+
+		if ( !construction )
+			return 0;
+
+		map< string, ref JMConstructionPartData > parts = new map< string, ref JMConstructionPartData >;
+		construction.COT_GetParts( parts, false );
+
+		TStringArray names = new TStringArray;
+
+		foreach (string partName, JMConstructionPartData part: parts )
+		{
+			if ( part.m_State == JMConstructionPartState.BUILT )
+				names.Insert( partName );
+		}
+
+		if ( names.Count() == 0 )
+			return 0;
+
+		construction.COT_RepairParts( names );
+
+		SendWebhookColored( "BB_Repair", instance, "Repaired every built part (" + names.Count() + ") of \"" + target.GetDisplayName() + "\" (" + target.GetType() + ")", JMConstants.WEBHOOK_COLOR_SUCCESS );
+
+		return names.Count();
+	}
+
+	//! Move a flag pole's mast to a fraction raised.
+	//! The mast animation is inverted (0 = fully raised) and the refresher timer moves
+	//! with it: in vanilla height IS the remaining refresh time.
+	protected bool Exec_SetFlagRaised( Object target, float raised01 )
+	{
+		TerritoryFlag flag;
+
+		if ( !Class.CastTo( flag, target ) )
+			return false;
+
+		float raised = Math.Clamp( raised01, 0, 1 );
+
+		flag.AnimateFlag( 1 - raised );
+		flag.AddRefresherTime01( raised - flag.GetRefresherTime01() );
+
+		return true;
+	}
+
+	protected bool Exec_SetImmobilized( Object target, int state )
+	{
+		ZombieBase zombie;
+		AnimalBase animal;
+
+		if ( Class.CastTo( zombie, target ) )
+			zombie.COT_SetImmobilized( state != 0 );
+		else if ( Class.CastTo( animal, target ) )
+			animal.COT_SetImmobilized( state != 0 );
+		else
+			return false;
+
+		return true;
+	}
+
+	//! Arm or disarm a trap where it lies.
+	//! Arming uses StartActivate, not SetActive, so it takes the trap's arming delay and
+	//! (COT override) records the admin as owner of whatever it later kills.
+	protected bool Exec_SetTrapArmed( Object target, int armed, PlayerIdentity ident = NULL )
+	{
+		TrapBase trap;
+
+		if ( !Class.CastTo( trap, target ) )
+			return false;
+
+		if ( armed != 0 )
+		{
+			if ( trap.IsActive() )
+				return false;
+
+			PlayerBase player;
+			Class.CastTo( player, GetPlayerObjectByIdentity( ident ) );
+
+			trap.StartActivate( player );
+
+			return true;
+		}
+
+		trap.SetInactive();
+
+		return true;
+	}
+
+	// =========================================================================
+	//  Weapons
+	// =========================================================================
+
+	//! Jam or clear a jam.
+	//! Unjamming re-rolls the weapon's state machine like the player manager's unjam: a
+	//! weapon left in its jammed FSM state with the flag cleared still acts as stuck.
+	protected bool Exec_SetJammed( Object target, int jammed )
+	{
+		Weapon_Base weapon;
+
+		if ( !Class.CastTo( weapon, target ) )
+			return false;
+
+		if ( weapon.IsJammed() == ( jammed != 0 ) )
+			return false;
+
+		weapon.SetJammed( jammed != 0 );
+		weapon.RandomizeFSMState();
+		weapon.Synchronize();
+
+		return true;
+	}
+
+	//! Put a round in the chamber or take one out.
+	//! The cartridge is whatever GetRandomChamberableAmmoTypeName says (per muzzle), so
+	//! no calibre knowledge is needed.
+	protected bool Exec_SetChambered( Object target, int chambered )
+	{
+		Weapon_Base weapon;
+
+		if ( !Class.CastTo( weapon, target ) )
+			return false;
+
+		int muzzle = weapon.GetCurrentMuzzle();
+		bool changed;
+
+		if ( chambered == 0 )
+		{
+			if ( weapon.IsChamberEmpty( muzzle ) )
+				return false;
+
+			float popDamage;
+			string popType;
+
+			changed = weapon.PopCartridgeFromChamber( muzzle, popDamage, popType );
+		}
+		else
+		{
+			if ( weapon.IsChamberFull( muzzle ) )
+				return false;
+
+			string ammoType = weapon.GetRandomChamberableAmmoTypeName( muzzle );
+
+			if ( ammoType == "" )
+				return false;
+
+			changed = weapon.PushCartridgeToChamber( muzzle, 0, ammoType );
+		}
+
+		//! Push/PopCartridgeFromChamber only touch chamber data and do not drive the FSM.
+		//! Vanilla always follows a chamber change with this same pair (weapon_base.c);
+		//! without it the FSM/anim state never catches up and the action looks like a no-op.
+		if ( changed )
+		{
+			weapon.RandomizeFSMState();
+			weapon.Synchronize();
+		}
+
+		return changed;
+	}
+
+	//! Attach a full magazine of whatever the weapon is configured to take.
+	protected bool Exec_LoadMagazine( Object target )
+	{
+		Weapon_Base weapon;
+
+		if ( !Class.CastTo( weapon, target ) )
+			return false;
+
+		int mi = weapon.GetCurrentMuzzle();
+		if ( !weapon.HasInternalMagazine( mi ) )
+		{
+			//! Already wearing one: swap rather than stack a second in a slot that
+			//! only holds one anyway.
+			Magazine existing;
+
+			for ( int i = 0; i < weapon.GetInventory().AttachmentCount(); i++ )
+			{
+				if ( Class.CastTo( existing, weapon.GetInventory().GetAttachmentFromIndex( i ) ) )
+				{
+					existing.ServerSetAmmoMax();
+					existing.SetSynchDirty();
+					weapon.Synchronize();
+					return true;
+				}
+			}
+		}
+
+		weapon.SpawnAmmo();
+
+		return true;
+	}
+
+	// =========================================================================
+	//  Fireplaces
+	// =========================================================================
+
+	//! Light or put out a fire.
+	//! force_start re-runs the start path even if the fireplace thinks it is burning
+	//! ("be lit", not "toggle a flag"). A fire with nothing to burn goes out on its first
+	//! heating tick, hence refuel.
+	protected bool Exec_SetBurning( Object target, int burning )
+	{
+		FireplaceBase fireplace;
+
+		if ( !Class.CastTo( fireplace, target ) )
+			return false;
+
+		if ( burning != 0 )
+			fireplace.StartFire( true );
+		else
+			fireplace.StopFire();
+
+		return true;
+	}
+
+	//! Fill the fireplace with firewood.
+	//! Created in its cargo, not handed to the admin: fuel elsewhere does not keep it burning.
+	protected bool Exec_FireplaceRefuel( Object target )
+	{
+		FireplaceBase fireplace;
+
+		if ( !Class.CastTo( fireplace, target ) || !fireplace.GetInventory() )
+			return false;
+
+		ItemBase wood;
+
+		if ( !Class.CastTo( wood, fireplace.GetInventory().CreateInInventory( FUEL_TYPE ) ) )
+			return false;
+
+		wood.SetQuantityMax();
+
+		return true;
+	}
+
+	protected bool Exec_SetStoneCircle( Object target, int state )
+	{
+		FireplaceBase fireplace;
+
+		if ( !Class.CastTo( fireplace, target ) )
+			return false;
+
+		fireplace.SetStoneCircleState( state != 0 );
+
+		return true;
+	}
+
+	protected bool Exec_SetOven( Object target, int state )
+	{
+		FireplaceBase fireplace;
+
+		if ( !Class.CastTo( fireplace, target ) )
+			return false;
+
+		fireplace.SetOvenState( state != 0 );
+
+		return true;
+	}
+
+	//! Finish every piece of food on the fireplace, and in anything standing on
+	//! it - a pot or a pan is an attachment holding its own cargo.
+	//! Answers how many items it changed, so the log line can tell an empty fireplace
+	//! from a full pot.
+	protected int Exec_CookAll( Object target )
+	{
+		FireplaceBase fireplace;
+
+		if ( !Class.CastTo( fireplace, target ) || !fireplace.GetInventory() )
+			return 0;
+
+		int cooked = CookContainer( fireplace );
+
+		for ( int i = 0; i < fireplace.GetInventory().AttachmentCount(); i++ )
+		{
+			EntityAI attachment = fireplace.GetInventory().GetAttachmentFromIndex( i );
+
+			if ( attachment )
+				cooked += CookContainer( attachment );
+		}
+
+		return cooked;
+	}
+
+	//! Cook everything directly in `container`'s cargo. Not recursive past one
+	//! level on purpose: a fireplace holds pots, a pot holds food, and nothing
+	//! sensible is nested deeper than that.
+	protected int CookContainer( EntityAI container )
+	{
+		//! An attachment need not have an inventory at all - a fireplace tripod
+		//! holds one, a stone does not.
+		if ( !container || !container.GetInventory() )
+			return 0;
+
+		CargoBase cargo = container.GetInventory().GetCargo();
+
+		if ( !cargo )
+			return 0;
+
+		int cooked = 0;
+
+		for ( int i = 0; i < cargo.GetItemCount(); i++ )
+		{
+			Edible_Base edible;
+
+			if ( !Class.CastTo( edible, cargo.GetItem( i ) ) )
+				continue;
+
+			int stage = BestCookedStage( edible.GetType() );
+
+			if ( stage == FoodStageType.NONE )
+				continue;
+
+			edible.ChangeFoodStage( stage );
+			cooked++;
+		}
+
+		return cooked;
+	}
+
+	//! The stage this class calls "cooked".
+	//! Read off the config, not assumed BAKED: no script query lists a class's stages,
+	//! and asking for one it lacks spawns it unchanged (the action looks like a no-op).
+	protected int BestCookedStage( string classname )
+	{
+		TStringArray names  = { "Baked", "Boiled", "Dried" };
+		TIntArray    stages = { FoodStageType.BAKED, FoodStageType.BOILED, FoodStageType.DRIED };
+
+		for ( int i = 0; i < names.Count(); i++ )
+		{
+			if ( g_Game.ConfigIsExisting( "CfgVehicles " + classname + " Food FoodStages " + names[i] ) )
+				return stages[i];
+		}
+
+		return FoodStageType.NONE;
+	}
+
+	// =========================================================================
+	//  Locks
+	// =========================================================================
+
+	//! Lock or unlock every combination lock standing near the target.
+	//! A base is not one entity (every gate, door and tower has its own lock), so the
+	//! radius makes it one action. Answers how many locks it touched, for the log.
+	protected int Exec_SetLockAll( Object target, int locked )
+	{
+		vector centre = target.GetPosition();
+		vector extent = Vector( LOCK_ALL_RADIUS, LOCK_ALL_RADIUS, LOCK_ALL_RADIUS );
+
+		//! SceneGetEntitiesInBox instead of GetObjectsAtPosition3D: far cheaper,
+		//! and a lock only ever hangs off an EntityAI, so nothing is lost.
+		array<EntityAI> nearby = new array<EntityAI>;
+		DayZPlayerUtils.SceneGetEntitiesInBox( centre - extent, centre + extent, nearby, QueryFlags.DYNAMIC | QueryFlags.STATIC );
+
+		float radiusSq = LOCK_ALL_RADIUS * LOCK_ALL_RADIUS;
+		int touched = 0;
+
+		ItemBase item;
+
+		foreach ( EntityAI entity: nearby )
+		{
+			//! The box reaches past the radius in its corners - keep it a sphere.
+			if ( vector.DistanceSq( centre, entity.GetPosition() ) > radiusSq )
+				continue;
+
+			if ( Class.CastTo( item, entity ) && item.COT_IsLock() && item.COT_SetLockState( locked ) )
+				++touched;
+
+			GameInventory inventory = entity.GetInventory();
+
+			if ( !inventory )
+				continue;
+
+			for ( int i = 0; i < inventory.AttachmentCount(); ++i )
+			{
+				EntityAI att = inventory.GetAttachmentFromIndex( i );
+
+				if ( Class.CastTo( item, att ) && item.COT_IsLock() && item.COT_SetLockState( locked ) )
+					++touched;
+			}
+		}
+
+		return touched;
+	}
+
+	[Obsolete("Use ItemBase::COT_SetLockState")]
+	protected void Exec_SetLock( Object target, int locked );
+
+	[Obsolete("Use ItemBase::COT_SetCode")]
+	protected void Exec_SetCode( Object target, int code );
+
+	//! The locked combination is not among the lock's net-synced variables,
+	//! so the client cannot read it and has to ask.
+	protected void Exec_GetCode( Object target, PlayerIdentity ident )
+	{
+		string code;
+
+		ItemBase lockItem;
+
+		if ( Class.CastTo( lockItem, target ) )
+			code = lockItem.COT_GetCode();
+		else
+			return;
+
+		if ( !ident )
+		{
+			OnObjectActionResult( JMESPObjectAction.GetCode, 0, code );
+			return;
+		}
+
+		ScriptRPC rpc = new ScriptRPC();
+		rpc.Write( JMESPObjectAction.GetCode );
+		rpc.Write( 0 );
+		rpc.Write( code );
+		rpc.Send( NULL, JMESPModuleRPC.ObjectActionResult, true, ident );
+	}
+
+	[Obsolete("Use JMLockItemT<DigitalCodeLock>::Get")]
+	static DigitalCodeLock GetDigitalCodeLockForAction( Object target, float doorValue );
+
+	//! Raise the vanilla keypad over a code lock, to dial a new code into
+	//! it. Client only - the keypad sends the code to the server itself.
+	void OpenDigitalCodeLockMenu( DigitalCodeLock codeLock )
+	{
+		OpenLockMenu( codeLock );
+	}
+
+	void OpenLockMenu( ItemBase lockItem )
+	{
+		if ( !lockItem || !IsMissionClient() )
+			return;
+
+		DigitalCodeLockUIBase keypad = DigitalCodeLockUIBase.Cast( g_Game.GetUIManager().EnterScriptedMenu( MENU_DIGITAL_CODELOCK, NULL ) );
+
+		if ( !keypad )
+			return;
+
+		keypad.COT_SetTargetLock( lockItem );
+
+		g_Game.GetCallQueue( CALL_CATEGORY_GUI ).CallLater( WatchCodeLockMenu, 250, true );
+	}
+
+	//! The keypad is entered without a parent menu, so closing it hides the cursor
+	//! COT's own windows still need - poll for it going away and give the cursor back.
+	protected void WatchCodeLockMenu()
+	{
+		if ( g_Game.GetUIManager().FindMenu( MENU_DIGITAL_CODELOCK ) )
+			return;
+
+		g_Game.GetCallQueue( CALL_CATEGORY_GUI ).Remove( WatchCodeLockMenu );
+
+		if ( g_cotBase.IsOpen() )
+			g_Game.GetUIManager().ShowUICursor( true );
+	}
+
+	[Obsolete("Use ItemBase::COT_SetLockState")]
+	protected bool Exec_SetDigitalLock( Object target, int locked, float fvalue );
+
+	[Obsolete("Use Exec_GetCode")]
+	protected void Exec_GetDigitalCode( Object target, float fvalue, PlayerIdentity ident );
+	
+	[Obsolete("Use ItemBase::COT_ResetCode")]
+	protected bool Exec_ResetDigitalCode( Object target, float fvalue );
+
+	protected void RPC_ObjectAction( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	{
+		int action;
+		if ( !ctx.Read( action ) )
+			return;
+
+		int ivalue;
+		if ( !ctx.Read( ivalue ) )
+			return;
+
+		float fvalue;
+		if ( !ctx.Read( fvalue ) )
+			return;
+
+		string permission = PermissionForAction( action );
+
+		if ( permission == "" )
+			return;
+
+		if ( !senderRPC )
+			return;
+
+		if ( !target )
+			return;
+
+		JMPlayerInstance instance;
+		if ( !JMPermissions.HasRPC( permission, senderRPC, instance ) )
+			return;
+
+		Exec_ObjectAction( action, ivalue, fvalue, target, senderRPC, instance );
+	}
+
+	protected void RPC_ObjectActionResult( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	{
+		if ( !IsMissionClient() )
+			return;
+
+		int action;
+		if ( !ctx.Read( action ) )
+			return;
+
+		int ivalue;
+		if ( !ctx.Read( ivalue ) )
+			return;
+
+		string text;
+		if ( !ctx.Read( text ) )
+			return;
+
+		OnObjectActionResult( action, ivalue, text );
+	}
+
+	protected void OnObjectActionResult( int action, int ivalue, string text = "" )
+	{
+		if ( action == JMESPObjectAction.GetCode )
+		{
+			if ( text == "" )
+				return;
+
+			g_Game.CopyToClipboard( text );
+
+			COTCreateLocalAdminNotification( new StringLocaliser( "STR_COT_ESP_MODULE_NOTIFY_CODE_COPIED", text ) );
+
+			return;
+		}
+	}
+
+	[Obsolete("Use DeleteObject( Object target )")]
 	void DeleteObject( int networkLow, int networkHigh )
 	{
-		ScriptRPC rpc = new ScriptRPC();
-		rpc.Write( networkLow );
-		rpc.Write( networkHigh );
-		rpc.Send( NULL, JMESPModuleRPC.DeleteObject, true, NULL );
-
-		m_RemoveDeleted = true;
+		Object target = g_Game.GetObjectByNetworkId( networkLow, networkHigh );
+		DeleteObject( target );
 	}
 
 	void DeleteObject( Object target )
 	{
-		Exec_DeleteObject( target, NULL );
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
+			Exec_DeleteObject( target, NULL );
+		else
+		{
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Send( target, JMESPModuleRPC.DeleteObject, true, NULL );
+		}
 
 		m_RemoveDeleted = true;
 	}
 
-	private void Exec_DeleteObject( Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	protected void Exec_DeleteObject( Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
 		if ( !target )
 			return;
@@ -1357,31 +3650,37 @@ class JMESPModule: JMRenderableModuleBase
 		vector transform[4];
 		target.GetTransform( transform );
 
+		//! Captured before the delete - the entry reads the target's own
+		//! state to know what to bring back.
+		JMActionHistory.Push( new JMDeleteHistoryEntry( target ), JMActionHistory.OwnerOf( ident ) );
+
 		g_Game.ObjectDelete( target );
 
 		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + obtype + " position=" + transform[3].ToString() + " action=delete" );
-		SendWebhook( "Delete", instance, "Deleted " + obtype + " at " + transform[3].ToString() );
+		SendWebhookColored( "Delete", instance, "Deleted " + obtype + " at " + transform[3].ToString(), JMConstants.WEBHOOK_COLOR_DANGER );
 	}
 
-	private void RPC_DeleteObject( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_DeleteObject( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
-		int netLow;
-		int netHigh;
-		if ( !ctx.Read( netLow ) || !ctx.Read( netHigh ) )
+		if ( !target )
 			return;
 
-		Object obj = g_Game.GetObjectByNetworkId( netLow, netHigh );
+		if ( !senderRPC )
+			return;
 
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.Delete", senderRPC, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_DELETE, senderRPC, instance ) )
 			return;
 
-		Exec_DeleteObject( obj, senderRPC, instance );
+		Exec_DeleteObject( target, senderRPC, instance );
 	}
 
-	void BaseBuilding_Build( BaseBuildingBase target, string part )
+	void BaseBuilding_Build( EntityAI target, string part )
 	{
-		if ( IsMissionOffline() )
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
 		{
 			Exec_BaseBuilding_Build( target, part, NULL );
 		} else
@@ -1392,39 +3691,54 @@ class JMESPModule: JMRenderableModuleBase
 		}
 	}
 
-	private void Exec_BaseBuilding_Build( BaseBuildingBase target, string part_name, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	protected void Exec_BaseBuilding_Build( EntityAI target, string part_name, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
-		bool requireMaterials = true;
-		if ( !IsMissionOffline() )
-			requireMaterials = !GetPermissionsManager().HasPermission( "ESP.Object.BaseBuilding.Build.MaterialsNotRequired", ident, instance );
+		ConstructionBase construction = GetConstructionOf( target );
+
+		if ( !construction )
+		{
+			CF.FormatErrorEx("%1 has no construction!", ErrorExSeverity.WARNING, target.ToString());
+			return;
+		}
+
+		bool requireMaterials = !JMPermissions.Has( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_BUILD_MATERIALSNOTREQUIRED, ident, instance );
 		
 		PlayerBase player;
 		Class.CastTo( player, GetPlayerObjectByIdentity( ident ) );
 
-		target.GetConstruction().COT_BuildRequiredParts( part_name, player, requireMaterials );
+		construction.COT_BuildRequiredParts( part_name, player, requireMaterials );
 
 		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=built part=" + part_name + " required_materials=" + requireMaterials );
-		SendWebhook( "BB_Build", instance, "Built the part \"" + part_name + "\" for \"" + target.GetDisplayName() + "\" (" + target.GetType() + ")" );
+		SendWebhookColored( "BB_Build", instance, "Built the part \"" + part_name + "\" for \"" + target.GetDisplayName() + "\" (" + target.GetType() + ")", JMConstants.WEBHOOK_COLOR_ESP );
 	}
 
-	private void RPC_BaseBuilding_Build( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_BaseBuilding_Build( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		string part_name;
 		if ( !ctx.Read( part_name ) )
 			return;
 
-		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.BaseBuilding.Build", senderRPC, instance ) )
+		if ( !senderRPC )
 			return;
 
-		BaseBuildingBase bb;
+		if ( !target )
+			return;
+
+		JMPlayerInstance instance;
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_BUILD, senderRPC, instance ) )
+			return;
+
+		EntityAI bb;
 		if ( Class.CastTo( bb, target ) )
 			Exec_BaseBuilding_Build( bb, part_name, senderRPC, instance );
 	}
 
-	void BaseBuilding_Dismantle( BaseBuildingBase target, string part )
+	void BaseBuilding_Dismantle( EntityAI target, string part )
 	{
-		if ( IsMissionOffline() )
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
 		{
 			Exec_BaseBuilding_Dismantle( target, part, NULL );
 		} else
@@ -1435,35 +3749,49 @@ class JMESPModule: JMRenderableModuleBase
 		}
 	}
 
-	private void Exec_BaseBuilding_Dismantle( BaseBuildingBase target, string part_name, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	protected void Exec_BaseBuilding_Dismantle( EntityAI target, string part_name, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
+		ConstructionBase construction = GetConstructionOf( target );
+
+		if ( !construction )
+			return;
+
 		PlayerBase player;
 		Class.CastTo( player, GetPlayerObjectByIdentity( ident ) );
 
-		target.GetConstruction().COT_DismantleRequiredParts( part_name, player );
+		construction.COT_DismantleRequiredParts( part_name, player );
 
 		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=dismantle part=" + part_name  );
-		SendWebhook( "BB_Dismantle", instance, "Dismantled the part \"" + part_name + "\" for \"" + target.GetDisplayName() + "\" (" + target.GetType() + ")" );
+		SendWebhookColored( "BB_Dismantle", instance, "Dismantled the part \"" + part_name + "\" for \"" + target.GetDisplayName() + "\" (" + target.GetType() + ")", JMConstants.WEBHOOK_COLOR_WARNING );
 	}
 
-	private void RPC_BaseBuilding_Dismantle( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_BaseBuilding_Dismantle( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		string part_name;
 		if ( !ctx.Read( part_name ) )
 			return;
 
-		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.BaseBuilding.Dismantle", senderRPC, instance ) )
+		if ( !senderRPC )
 			return;
 
-		BaseBuildingBase bb;
+		if ( !target )
+			return;
+
+		JMPlayerInstance instance;
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_DISMANTLE, senderRPC, instance ) )
+			return;
+
+		EntityAI bb;
 		if ( Class.CastTo( bb, target ) )
 			Exec_BaseBuilding_Dismantle( bb, part_name, senderRPC, instance );
 	}
 
-	void BaseBuilding_Repair( BaseBuildingBase target, string part )
+	void BaseBuilding_Repair( EntityAI target, string part )
 	{
-		if ( IsMissionOffline() )
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
 		{
 			Exec_BaseBuilding_Repair( target, part, NULL );
 		} else
@@ -1474,33 +3802,116 @@ class JMESPModule: JMRenderableModuleBase
 		}
 	}
 
-	private void Exec_BaseBuilding_Repair( BaseBuildingBase target, string part_name, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	protected void Exec_BaseBuilding_Repair( EntityAI target, string part_name, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
-		target.GetConstruction().COT_RepairPart( part_name );
+		ConstructionBase construction = GetConstructionOf( target );
+
+		if ( !construction )
+			return;
+
+		construction.COT_RepairPart( part_name );
 
 		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=repair part=" + part_name  );
-		SendWebhook( "BB_Repair", instance, "Repaired the part \"" + part_name + "\" for \"" + target.GetDisplayName() + "\" (" + target.GetType() + ")" );
+		SendWebhookColored( "BB_Repair", instance, "Repaired the part \"" + part_name + "\" for \"" + target.GetDisplayName() + "\" (" + target.GetType() + ")", JMConstants.WEBHOOK_COLOR_SUCCESS );
 	}
 
-	private void RPC_BaseBuilding_Repair( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_BaseBuilding_Repair( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
 		string part_name;
 		if ( !ctx.Read( part_name ) )
 			return;
 
-		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.BaseBuilding.Repair", senderRPC, instance ) )
+		if ( !senderRPC )
 			return;
 
-		BaseBuildingBase bb;
+		if ( !target )
+			return;
+
+		JMPlayerInstance instance;
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_REPAIR, senderRPC, instance ) )
+			return;
+
+		EntityAI bb;
 		if ( Class.CastTo( bb, target ) )
 			Exec_BaseBuilding_Repair( bb, part_name, senderRPC, instance );
 	}
 
-	
+		//! Damage or restore ONE part of a base building object.
+	//! Separate from SetHealth (global only): a wall's parts are damage ZONES on one
+	//! entity. `health01` is a fraction of that zone's own maximum, which differs per
+	//! part and material tier.
+	void BaseBuilding_SetPartHealth( EntityAI target, string part, float health01 )
+	{
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
+		{
+			Exec_BaseBuilding_SetPartHealth( target, part, health01, NULL );
+		} else
+		{
+			ScriptRPC rpc = new ScriptRPC();
+			rpc.Write( part );
+			rpc.Write( health01 );
+			rpc.Send( target, JMESPModuleRPC.BaseBuilding_SetPartHealth, true, NULL );
+		}
+	}
+
+	protected void Exec_BaseBuilding_SetPartHealth( EntityAI target, string part_name, float health01, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	{
+		if ( !target )
+			return;
+
+		//! The part is named by its CONSTRUCTION part name; the health lives on
+		//! the damage zone that part maps to, and only the damage system knows
+		//! which that is.
+		string damageZone;
+
+		if ( !DamageSystem.GetDamageZoneFromComponentName( target, part_name, damageZone ) )
+			return;
+
+		float maxHealth = target.GetMaxHealth( damageZone, "Health" );
+
+		if ( maxHealth <= 0 )
+			return;
+
+		COT.SetHealth( target, damageZone, "Health", Math.Clamp( health01, 0, 1 ) * maxHealth );
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=parthealth part=" + part_name + " value=" + health01 );
+		SendWebhookColored( "BB_Repair", instance, "Set the part \"" + part_name + "\" of \"" + target.GetDisplayName() + "\" (" + target.GetType() + ") to " + Math.Round( health01 * 100 ) + "% health", JMConstants.WEBHOOK_COLOR_WARNING );
+	}
+
+	protected void RPC_BaseBuilding_SetPartHealth( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	{
+		string part_name;
+		if ( !ctx.Read( part_name ) )
+			return;
+
+		float health01;
+		if ( !ctx.Read( health01 ) )
+			return;
+
+		if ( !senderRPC )
+			return;
+
+		if ( !target )
+			return;
+
+		JMPlayerInstance instance;
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_BASEBUILDING_SETHEALTH, senderRPC, instance ) )
+			return;
+
+		EntityAI bb;
+		if ( Class.CastTo( bb, target ) )
+			Exec_BaseBuilding_SetPartHealth( bb, part_name, health01, senderRPC, instance );
+	}
+
 	void Vehicle_Unstuck( Object target )
 	{
-		if ( IsMissionOffline() )
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
 		{
 			Exec_Vehicle_Unstuck( target, NULL );
 		} else
@@ -1510,22 +3921,28 @@ class JMESPModule: JMRenderableModuleBase
 		}
 	}
 
-	private void Exec_Vehicle_Unstuck( Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	protected void Exec_Vehicle_Unstuck( Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
 		Transport transport;
 		if ( Class.CastTo( transport, target ) )
 		{
-			CommunityOnlineToolsBase.PlaceOnSurfaceAtPosition(transport, transport.GetPosition());
+			COT.PlaceOnSurfaceAtPosition(transport, transport.GetPosition());
 		}
 
 		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=Unstuck " );
-		SendWebhook( "Vehicle_Unstuck", instance, "Unstuck " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition() );
+		SendWebhookColored( "Vehicle_Unstuck", instance, "Unstuck " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_INFO );
 	}
 
-	private void RPC_Vehicle_Unstuck( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_Vehicle_Unstuck( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
+		if ( !senderRPC )
+			return;
+
+		if ( !target )
+			return;
+
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.Car.Unstuck", senderRPC, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_CAR_UNSTUCK, senderRPC, instance ) )
 			return;
 
 		Exec_Vehicle_Unstuck( target, senderRPC, instance );
@@ -1533,7 +3950,10 @@ class JMESPModule: JMRenderableModuleBase
 
 	void Vehicle_Refuel( Object target)
 	{
-		if ( IsMissionOffline() )
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
 		{
 			Exec_Vehicle_Refuel( target, NULL );
 		} else
@@ -1543,18 +3963,42 @@ class JMESPModule: JMRenderableModuleBase
 		}
 	}
 
-	private void Exec_Vehicle_Refuel( Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	//! `before` is the fuel fraction read ahead of the change (-1 when the
+	//! vehicle has no tank GetFuel01 can read - then there is nothing to undo to).
+	protected void PushFuelHistory( Object target, float before, PlayerIdentity ident )
 	{
-		CommunityOnlineToolsBase.Refuel(target);
+		if ( before < 0 )
+			return;
 
-		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=refuel" );
-		SendWebhook( "Vehicle_Refuel", instance, "Refuelled " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition() );
+		float after = COT.GetFuel01( target );
+		if ( after < 0 )
+			return;
+
+		JMActionHistory.Push( new JMFuelHistoryEntry( target, before, after ), JMActionHistory.OwnerOf( ident ) );
 	}
 
-	private void RPC_Vehicle_Refuel( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void Exec_Vehicle_Refuel( Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
+		float fuelBefore = COT.GetFuel01( target );
+
+		COT.Refuel(target);
+
+		PushFuelHistory( target, fuelBefore, ident );
+
+		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=refuel" );
+		SendWebhookColored( "Vehicle_Refuel", instance, "Refuelled " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
+	}
+
+	protected void RPC_Vehicle_Refuel( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	{
+		if ( !senderRPC )
+			return;
+
+		if ( !target )
+			return;
+
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.Car.Refuel", senderRPC, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_CAR_REFUEL, senderRPC, instance ) )
 			return;
 
 		Exec_Vehicle_Refuel( target, senderRPC, instance );
@@ -1562,7 +4006,10 @@ class JMESPModule: JMRenderableModuleBase
 
 	void Heal( Object target )
 	{
-		if ( IsMissionOffline() )
+		int netLow, netHigh;
+		target.GetNetworkID( netLow, netHigh );
+
+		if ( ( !netLow && !netHigh ) || !g_Game.IsMultiplayer() )
 		{
 			Exec_Heal( target, NULL );
 		} else
@@ -1572,17 +4019,32 @@ class JMESPModule: JMRenderableModuleBase
 		}
 	}
 
-	private void Exec_Heal( Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
+	protected void Exec_Heal( Object target, PlayerIdentity ident, JMPlayerInstance instance = NULL )
 	{
-		bool allowDamage = target.GetAllowDamage();
+		//! Anything health/dmg system related can segfault on plain objects
+		if ( target.IsPlainObject() )
+			return;
 
-		if (!allowDamage)
-			target.SetAllowDamage(true);
-
-		CommunityOnlineToolsBase.HealEntityRecursive(target);
+		bool includeAttachments = true;
+		bool includeCargo = true;
 
 		PlayerBase player;
 		if (Class.CastTo(player, target))
+		{
+			includeAttachments = JMPermissions.Has( JMConstants.PERM_PLAYER_HEAL_ATTACHMENTS, ident );
+			includeCargo = JMPermissions.Has( JMConstants.PERM_PLAYER_HEAL_CARGO, ident );
+		}
+
+		//! Captured before the heal - the entry reads the target's own
+		//! current health (and, for a player, energy/water) to know what to
+		//! restore.
+		EntityAI healEntity;
+		if ( Class.CastTo( healEntity, target ) )
+			JMActionHistory.Push( new JMHealHistoryEntry( healEntity, includeAttachments, includeCargo ), JMActionHistory.OwnerOf( ident ) );
+
+		COT.HealEntityRecursive(target, includeAttachments, includeCargo);
+
+		if (player)
 		{
 			if ( player.GetBleedingManagerServer() )
 				player.GetBleedingManagerServer().RemoveAllSources();
@@ -1594,23 +4056,26 @@ class JMESPModule: JMRenderableModuleBase
 			player.GetStatWater().Set( player.GetStatWater().GetMax() );
 		}
 
-		if (!allowDamage)
-			target.SetAllowDamage(false);
-
 		GetCommunityOnlineToolsBase().Log( ident, "ESP target=" + target + " action=heal" );
-		SendWebhook( "Heal", instance, "Healed " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition() );
+		SendWebhookColored( "Heal", instance, "Healed " + target.GetDisplayName() + " (" + target.GetType() + ") at " + target.GetPosition(), JMConstants.WEBHOOK_COLOR_SUCCESS );
 	}
 
-	private void RPC_Heal( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_Heal( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
+		if ( !senderRPC )
+			return;
+
+		if ( !target )
+			return;
+
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.Heal", senderRPC, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_HEAL, senderRPC, instance ) )
 			return;
 
 		Exec_Heal( target, senderRPC, instance );
 	}
 
-	private void OnAddObject( Object obj )
+	protected void OnAddObject( Object obj )
 	{
 		if ( m_SelectedObjects.Find( obj ) != -1 )
 			return;
@@ -1618,7 +4083,7 @@ class JMESPModule: JMRenderableModuleBase
 		m_SelectedObjects.Insert( obj );
 	}
 
-	private void OnRemoveObject( Object obj )
+	protected void OnRemoveObject( Object obj )
 	{
 		int index = m_SelectedObjects.Find( obj );
 		if ( index == -1 )
@@ -1626,7 +4091,7 @@ class JMESPModule: JMRenderableModuleBase
 
 		m_SelectedObjects.Remove( index );
 	}
-	
+
 	void MakeItemSet( string name )
 	{
 		ScriptRPC rpc = new ScriptRPC();
@@ -1635,10 +4100,13 @@ class JMESPModule: JMRenderableModuleBase
 		rpc.Send( NULL, JMESPModuleRPC.MakeItemSet, true, NULL );
 	}
 
-	private void RPC_MakeItemSet( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_MakeItemSet( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
+		if ( !senderRPC )
+			return;
+
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "Items.CreateSet", senderRPC, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ITEMS_CREATESET, senderRPC, instance ) )
 			return;
 		
 		string name;
@@ -1652,8 +4120,71 @@ class JMESPModule: JMRenderableModuleBase
 		Exec_MakeItemSet( name, objects, instance );
 	}
 
-	private void Exec_MakeItemSet( string name, set< Object > objects, JMPlayerInstance instance )
+	protected void Exec_MakeItemSet( string name, set< Object > objects, JMPlayerInstance instance )
 	{
+	#ifdef DZ_Expansion_Core
+		// Use Expansion loadout format
+		array< ref ExpansionPrefab > loadouts = new array< ref ExpansionPrefab >;
+
+		foreach ( Object obj: objects )
+		{
+			EntityAI entity;
+			if ( Class.CastTo( entity, obj ) )
+			{
+				ExpansionPrefab expPrefab = JMCompensationHelper.CreateExpansionLoadout( entity );
+				if ( expPrefab )
+					loadouts.Insert( expPrefab );
+			}
+		}
+
+		if ( loadouts.Count() > 0 )
+		{
+			string loadoutJSON;
+			string errorMsg;
+
+			foreach ( ExpansionPrefab prefabItem: loadouts )
+			{
+				string singleJSON;
+				if ( JsonFileLoader<ExpansionPrefab>.MakeData( prefabItem, singleJSON, errorMsg ) )
+				{
+					if ( loadoutJSON )
+						loadoutJSON += "\n\n";
+					loadoutJSON += singleJSON;
+				}
+			}
+
+			if ( !errorMsg )
+			{
+				if ( !FileExist( JMConstants.DIR_LOADOUTS ) )
+					MakeDirectory( JMConstants.DIR_LOADOUTS );
+
+				string filepath = JMConstants.DIR_LOADOUTS + name + ".json";
+				FileHandle file = OpenFile( filepath, FileMode.WRITE );
+				if ( file )
+				{
+					FPrintln( file, loadoutJSON );
+					CloseFile( file );
+
+					GetCommunityOnlineToolsBase().Log( instance, "Created Expansion loadout set '" + name + "'" );
+					SendWebhookColored( "Create", instance, "Created Expansion loadout set '" + name + "'", JMConstants.WEBHOOK_COLOR_INFO );
+
+					if ( m_LoadoutModule )
+						m_LoadoutModule.Load();
+				}
+			}
+			else
+			{
+				CF_Log.Error( errorMsg );
+			}
+		}
+	#else
+		// Fallback to legacy format
+		if ( !m_LoadoutModule )
+			Class.CastTo( m_LoadoutModule, GetModuleManager().GetModule( JMLoadoutModule ) );
+
+		if ( m_LoadoutModule )
+			m_LoadoutModule.Exec_CreateLoadoutSet( name, objects, instance );
+	#endif
 	}
 
 	void DuplicateSelected()
@@ -1663,10 +4194,13 @@ class JMESPModule: JMRenderableModuleBase
 		rpc.Send( NULL, JMESPModuleRPC.DuplicateAll, true, NULL );
 	}
 
-	private void RPC_DuplicateAll( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_DuplicateAll( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
+		if ( !senderRPC )
+			return;
+
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.DuplicateAll", senderRPC, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_DUPLICATEALL, senderRPC, instance ) )
 			return;
 
 		set< Object > objects = new set< Object >;
@@ -1676,7 +4210,7 @@ class JMESPModule: JMRenderableModuleBase
 		Exec_DuplicateAll( objects, instance );
 	}
 
-	private void Exec_DuplicateAll( set< Object > objects, JMPlayerInstance instance )
+	protected void Exec_DuplicateAll( set< Object > objects, JMPlayerInstance instance )
 	{
 	}
 
@@ -1692,7 +4226,10 @@ class JMESPModule: JMRenderableModuleBase
 		else
 		{
 			ScriptRPC rpc = new ScriptRPC();
-			JM_GetSelected().SerializeObjects( rpc );
+			set< Object> localObjects = new set< Object >;
+			JM_GetSelected().SerializeObjects( rpc, localObjects );
+			if ( localObjects.Count() > 0 )
+				Exec_DeleteAll(localObjects, GetPermissionsManager().GetClientPlayer());
 			rpc.Send( NULL, JMESPModuleRPC.DeleteAll, true, NULL );
 		}
 
@@ -1703,17 +4240,20 @@ class JMESPModule: JMRenderableModuleBase
 		m_RemoveDeleted = true;
 	}
 
-	private void RPC_DeleteAll( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_DeleteAll( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
+		if ( !senderRPC )
+			return;
+
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.DeleteAll", senderRPC, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_DELETEALL, senderRPC, instance ) )
 			return;
 
 		set< Object > objects = new set< Object >;
 		if ( !JM_GetSelected().DeserializeObjects( ctx, objects ) )
 			return;
 
-		if ( GetPermissionsManager().HasPermission( "Loadouts.Backup", senderRPC, instance ) )
+		if ( JMPermissions.HasRPC( JMConstants.PERM_LOADOUTS_BACKUP, senderRPC, instance ) )
 		{
 			if (!m_LoadoutModule)
 				Class.CastTo(m_LoadoutModule, GetModuleManager().GetModule(JMLoadoutModule));
@@ -1724,11 +4264,17 @@ class JMESPModule: JMRenderableModuleBase
 		Exec_DeleteAll( objects, instance );
 	}
 
-	private void Exec_DeleteAll( set< Object > objects, JMPlayerInstance instance )
+	protected void Exec_DeleteAll( set< Object > objects, JMPlayerInstance instance )
 	{
 		int removed = 0;
 		int count = objects.Count();
-		
+
+		//! One entry for the whole delete, so one Ctrl+Z brings the lot back.
+		//! Each member is captured BEFORE it is deleted below.
+		JMCompositeHistoryEntry history;
+		if ( count <= HISTORY_GROUP_MAX )
+			history = new JMCompositeHistoryEntry( JMConstants.PERM_ESP_OBJECT_DELETEALL, "Delete" );
+
 		int i = objects.Count();
 		while ( i > 0 )
 		{
@@ -1743,6 +4289,9 @@ class JMESPModule: JMRenderableModuleBase
 
 				GetCommunityOnlineToolsBase().Log( instance, "ESP index=" + ( count - i ) + " target=" + obtype + " position=" + transform[3].ToString() + " action=delete" );
 
+				if ( history )
+					history.Add( new JMDeleteHistoryEntry( obj ) );
+
 				g_Game.ObjectDelete( obj );
 				removed++;
 			}
@@ -1750,10 +4299,13 @@ class JMESPModule: JMRenderableModuleBase
 			i = objects.Count();
 		}
 
+		if ( history && history.Count() > 0 )
+			JMActionHistory.Push( history, JMActionHistory.OwnerOfInstance( instance ) );
+
 		if ( removed > 0 )
 		{
 			GetCommunityOnlineToolsBase().Log( instance, "ESP action=delete_all count=" + removed + " attempted=" + count );
-			SendWebhook( "DeleteAll", instance, "Performed a delete on " + removed + " objects." );
+			SendWebhookColored( "DeleteAll", instance, "Performed a delete on " + removed + " objects.", JMConstants.WEBHOOK_COLOR_CRITICAL );
 		}
 	}
 
@@ -1770,15 +4322,21 @@ class JMESPModule: JMRenderableModuleBase
 		{
 			ScriptRPC rpc = new ScriptRPC();
 			rpc.Write( cursor );
-			JM_GetSelected().SerializeObjects( rpc );
+			set< Object> localObjects = new set< Object >;
+			JM_GetSelected().SerializeObjects( rpc, localObjects );
+			if ( localObjects.Count() > 0 )
+				Exec_MoveToCursor(cursor, localObjects, GetPermissionsManager().GetClientPlayer());
 			rpc.Send( NULL, JMESPModuleRPC.MoveToCursor, true, NULL );
 		}
 	}
 
-	private void RPC_MoveToCursor( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
+	protected void RPC_MoveToCursor( ParamsReadContext ctx, PlayerIdentity senderRPC, Object target )
 	{
+		if ( !senderRPC )
+			return;
+
 		JMPlayerInstance instance;
-		if ( !GetPermissionsManager().HasPermission( "ESP.Object.MoveToCursor", senderRPC, instance ) )
+		if ( !JMPermissions.HasRPC( JMConstants.PERM_ESP_OBJECT_MOVETOCURSOR, senderRPC, instance ) )
 			return;
 		
 		vector cursor;
@@ -1792,7 +4350,7 @@ class JMESPModule: JMRenderableModuleBase
 		Exec_MoveToCursor( cursor, objects, instance );
 	}
 
-	private void Exec_MoveToCursor( vector cursor, set< Object > objects, JMPlayerInstance instance )
+	protected void Exec_MoveToCursor( vector cursor, set< Object > objects, JMPlayerInstance instance )
 	{
 		int moved = 0;
 		int count = objects.Count();
@@ -1813,7 +4371,7 @@ class JMESPModule: JMRenderableModuleBase
 
 				EntityAI ent = EntityAI.Cast(obj);
 				if (ent)
-					CommunityOnlineToolsBase.PlaceOnSurfaceAtPosition(ent, cursor);
+					COT.PlaceOnSurfaceAtPosition(ent, cursor);
 				else
 					obj.SetPosition(cursor);
 				moved++;
@@ -1825,7 +4383,7 @@ class JMESPModule: JMRenderableModuleBase
 		if ( moved > 0 )
 		{
 			GetCommunityOnlineToolsBase().Log( instance, "ESP action=move_to_cursor count=" + moved + " attempted=" + count );
-			SendWebhook( "MoveToCursor", instance, "Performed a move to cursor on " + moved + " objects." );
+			SendWebhookColored( "MoveToCursor", instance, "Performed a move to cursor on " + moved + " objects.", JMConstants.WEBHOOK_COLOR_ESP );
 		}
 	}
 
@@ -1844,7 +4402,7 @@ class JMESPModule: JMRenderableModuleBase
 			if (!Class.CastTo(ent, JMobjects[i].obj))
 				continue;
 
-			if (ent.IsEmpty())
+			if (!ent.GetInventory() || ent.IsEmpty())
 				continue;
 			
 			for (int k=0; k < ent.GetInventory().AttachmentCount(); k++)
@@ -1862,7 +4420,7 @@ class JMESPModule: JMRenderableModuleBase
 			}
 		}
 
-		g_Game.CopyToClipboard(clipboardOutput);
+		COTFeedback.Copy(clipboardOutput);
 	}
 
 	void CopyToClipboardMarket()
@@ -1895,7 +4453,7 @@ class JMESPModule: JMRenderableModuleBase
 
 		string errorMsg;
 		if (JsonFileLoader<ExpansionMarketCategory>.MakeData(category, categoryJSON, errorMsg))
-			g_Game.CopyToClipboard(categoryJSON);
+			COTFeedback.Copy(categoryJSON);
 		else
 			COTCreateLocalAdminNotification(new StringLocaliser(errorMsg));
 #endif
@@ -1939,8 +4497,61 @@ class JMESPModule: JMRenderableModuleBase
 		}
 
 		clipboardOutput += "</spawnabletypes>\n";
-		g_Game.CopyToClipboard(clipboardOutput);
+		COTFeedback.Copy(clipboardOutput);
 	}
+
+	//! types.xml entries (nominal/lifetime/restock/flags), one <type> block per selection,
+	//! duplicates included (like the object spawner's COPYLISTTYPES); meant to be pasted
+	//! into a types.xml and edited, not used as is.
+	void CopyToClipboardTypes()
+	{
+		string clipboardOutput = "";
+
+		clipboardOutput += "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
+		clipboardOutput += "<types>\n";
+
+		set< ref JMSelectedObject > JMobjects = JM_GetSelected().GetObjects();
+		for (int i = 0; i < JMobjects.Count(); i++)
+		{
+			clipboardOutput += "	<type name=\"" + JMobjects[i].obj.GetType() + "\">\n";
+			clipboardOutput += "		<nominal>0</nominal>\n";
+			clipboardOutput += "		<lifetime>3888000</lifetime>\n";
+			clipboardOutput += "		<restock>0</restock>\n";
+			clipboardOutput += "		<min>0</min>\n";
+			clipboardOutput += "		<quantmin>-1</quantmin>\n";
+			clipboardOutput += "		<quantmax>-1</quantmax>\n";
+			clipboardOutput += "		<cost>100</cost>\n";
+			clipboardOutput += "		<flags count_in_cargo=\"0\" count_in_hoarder=\"0\" count_in_map=\"1\" count_in_player=\"0\" crafted=\"0\" deloot=\"0\"/>\n";
+			clipboardOutput += "	</type>\n";
+		}
+
+		clipboardOutput += "</types>";
+		COTFeedback.Copy(clipboardOutput);
+	}
+
+	//! DayZ Expansion's own object-placement file format - one pipe-delimited
+#ifdef DZ_Expansion_Core
+	//! line per object, read by ExpansionWorldObjectsModule.LoadObjectsFile:
+	//!   ClassName|X Y Z|RotX RotY RotZ|special|takeable
+	//! `special` off and `takeable` on are safe defaults for a pasted export.
+	void CopyToClipboardMap()
+	{
+		string clipboardOutput = "";
+
+		set< ref JMSelectedObject > JMobjects = JM_GetSelected().GetObjects();
+		for (int i = 0; i < JMobjects.Count(); i++)
+		{
+			Object obj = JMobjects[i].obj;
+
+			if (i > 0)
+				clipboardOutput += "\n";
+
+			clipboardOutput += obj.GetType() + "|" + obj.GetPosition().ToString() + "|" + obj.GetOrientation().ToString() + "|false|true";
+		}
+
+		COTFeedback.Copy(clipboardOutput);
+	}
+#endif
 
 #ifdef DZ_Expansion_Core
 	bool CopyToClipboardExpLoadout(typename type)
@@ -1971,24 +4582,24 @@ class JMESPModule: JMRenderableModuleBase
 
 		foreach (JMSelectedObject selectedObj: selectedObjs)
 		{
-			ExpansionPrefabObject loadout = new ExpansionPrefabObject();
+			ExpansionPrefab expPrefab = new ExpansionPrefab();
 
 			EntityAI entity;
 			if (Class.CastTo(entity, selectedObj.obj))
 			{
 				if (entity.IsMan())
 				{
-					AddChildrenToExpLoadoutRecursive(loadout, entity);
+					JMCompensationHelper.AddChildrenToExpLoadoutRecursive(expPrefab, entity);
 				}
 				else
 				{
-					loadout.ClassName = entity.GetType();
-					AddToExpLoadoutRecursive(loadout, entity);
+					expPrefab.ClassName = entity.GetType();
+					JMCompensationHelper.AddToExpLoadoutRecursive(expPrefab, entity);
 				}
 			}
 
 			string loadoutJSON;
-			if (JsonFileLoader<ExpansionPrefabObject>.MakeData(loadout, loadoutJSON, errorMsg))
+			if (JsonFileLoader<ExpansionPrefab>.MakeData(expPrefab, loadoutJSON, errorMsg))
 			{
 				if (loadoutsJSON)
 					loadoutsJSON += "\n\n";
@@ -2008,53 +4619,10 @@ class JMESPModule: JMRenderableModuleBase
 		}
 		else
 		{
-			g_Game.CopyToClipboard(loadoutsJSON);
+			COTFeedback.Copy(loadoutsJSON);
 		}
 
 		return errorMsg == string.Empty;
-	}
-
-	void AddChildrenToExpLoadoutRecursive(ExpansionPrefabObject loadout, EntityAI entity)
-	{
-		auto inventory = entity.GetInventory();
-		int i;
-		EntityAI item;
-		auto il = new InventoryLocation();
-
-		for (i = 0; i < inventory.AttachmentCount(); ++i)
-		{
-			item = inventory.GetAttachmentFromIndex(i);
-			item.GetInventory().GetCurrentInventoryLocation(il);
-			string slotName = InventorySlots.GetSlotName(il.GetSlot());
-			loadout = loadout.BeginAttachment(item.GetType(), slotName);
-			AddToExpLoadoutRecursive(loadout, item);
-			loadout = loadout.End();
-		}
-
-		auto cargo = inventory.GetCargo();
-		if (cargo)
-		{
-			for (i = 0; i < cargo.GetItemCount(); ++i)
-			{
-				item = cargo.GetItem(i);
-				loadout = loadout.BeginCargo(item.GetType());
-				AddToExpLoadoutRecursive(loadout, item);
-				loadout = loadout.End();
-			}
-		}
-	}
-
-	void AddToExpLoadoutRecursive(ExpansionPrefabObject loadout, EntityAI item)
-	{
-		loadout.Chance = 1.0;
-
-		if (item.HasQuantity())
-		{
-			float quantity01 = item.GetQuantityNormalized();
-			loadout.SetQuantity(quantity01, quantity01);
-		}
-
-		AddChildrenToExpLoadoutRecursive(loadout, item);
 	}
 #endif
 }

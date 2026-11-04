@@ -269,7 +269,7 @@ modded class JMObjectSpawnerModule
 	    return NULL;
 	}
 	
-	override private void Server_DeleteEntity( notnull Object obj, PlayerIdentity ident )
+	override protected void Server_DeleteEntity( notnull Object obj, PlayerIdentity ident ) // HOD: was private; COT dev/1.30 declares it protected
 	{
 		// NO EXPANSION MOD FOUND? LET VANILLA COT TAKE OVER.
 		#ifndef DZ_Expansion_AI
