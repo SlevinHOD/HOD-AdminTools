@@ -5,6 +5,7 @@ Catches: unbalanced braces/parens/brackets, unterminated strings, ternary
 operators, reserved words used as identifiers, duplicate class names, and
 classes used across modules in the wrong direction (3_Game can't see 4_World).
 """
+import json
 import os
 import re
 import sys
@@ -12,6 +13,13 @@ import sys
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "src/HOD_AdminTools/scripts"
 RESERVED = {"set", "map", "array", "vector", "Class", "Managed", "Param", "out", "inout", "ref", "class", "auto", "local", "string", "typename", "func", "null", "this", "super", "new", "delete", "notnull", "autoptr", "proto", "native", "static", "const", "private", "protected", "override", "event", "sealed", "modded"}
 MODULES = ["3_Game", "4_World", "5_Mission"]
+# Every class/enum/typedef name from vanilla, CF, COT, Expansion and VPP. All loaded mods share one
+# script namespace, so a variable named like ANY of these fails to compile ("already used as type name").
+_TYPES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "enforce_types.json")
+KNOWN_TYPES = set(json.load(open(_TYPES_FILE))) if os.path.exists(_TYPES_FILE) else set()
+# Third-party code we ship as-is (already runs on live servers) - only structural checks apply.
+THIRD_PARTY = ("ZenCOT",)
+DECL = re.compile(r"(?:^\s*|[(,]\s*|\b(?:protected|private|static|const|ref|autoptr|out|inout|notnull)\s+)(?:\w+(?:<[^;(){}]*>)?)\s+(\w+)\s*(?=[=;,)\[])")
 
 
 def strip(src):
@@ -80,6 +88,13 @@ def main():
             m = re.search(r"\b(?:int|float|bool|string|vector|array<[^>]+>|[A-Z]\w*)\s+(\w+)\s*[=;,)]", line)
             if m and m.group(1) in RESERVED:
                 errors.append(f"{path}:{ln}: reserved word used as identifier: {m.group(1)}")
+            if not any(t in path for t in THIRD_PARTY):
+                for dm in DECL.finditer(line):
+                    name = dm.group(1)
+                    if name in KNOWN_TYPES:
+                        errors.append(f"{path}:{ln}: identifier '{name}' is also a type name")
+                    elif name[:1].isupper() and not name.isupper() and not line.strip().startswith(("class ", "modded class", "enum ")):
+                        errors.append(f"{path}:{ln}: PascalCase variable '{name}' - use camelCase (avoids clashes with other mods' types)")
         if stack:
             errors.append(f"{path}: unclosed '{stack[-1][0]}' from line {stack[-1][1]}")
         for m in re.finditer(r"^\s*(modded\s+)?class\s+(\w+)", s, re.M):

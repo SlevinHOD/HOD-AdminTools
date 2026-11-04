@@ -126,10 +126,10 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 			{
 				HOD_OBSet obSet = new HOD_OBSet();
 				JsonFileLoader<HOD_OBSet>.JsonLoadFile(HOD_OB_DIR + "/" + fileName, obSet);
-				if (obSet.Name == "")
-					obSet.Name = fileName.Substring(0, fileName.Length() - 5);
-				m_Sets.Set(obSet.Name, obSet);
-				if (obSet.Active)
+				if (obSet.name == "")
+					obSet.name = fileName.Substring(0, fileName.Length() - 5);
+				m_Sets.Set(obSet.name, obSet);
+				if (obSet.active)
 					Server_SpawnSet(obSet);
 			}
 			more = FindNextFile(h, fileName, attr);
@@ -140,28 +140,28 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 
 	protected void Server_Save(HOD_OBSet obSet)
 	{
-		JsonFileLoader<HOD_OBSet>.JsonSaveFile(SetFile(obSet.Name), obSet);
+		JsonFileLoader<HOD_OBSet>.JsonSaveFile(SetFile(obSet.name), obSet);
 	}
 
 	protected Object Server_SpawnObject(HOD_OBObject o)
 	{
 		int flags = ECE_SETUP | ECE_UPDATEPATHGRAPH | ECE_CREATEPHYSICS | ECE_NOLIFETIME | ECE_NOPERSISTENCY_WORLD | ECE_KEEPHEIGHT;
-		Object obj = GetGame().CreateObjectEx(o.Type, o.Position, flags);
+		Object obj = GetGame().CreateObjectEx(o.type, o.position, flags);
 		if (!obj)
 			return null;
-		obj.SetPosition(o.Position);
-		obj.SetOrientation(o.Orientation);
+		obj.SetPosition(o.position);
+		obj.SetOrientation(o.orientation);
 		obj.Update();
 		return obj;
 	}
 
 	protected void Server_SpawnSet(HOD_OBSet obSet)
 	{
-		Server_DespawnSet(obSet.Name);
+		Server_DespawnSet(obSet.name);
 		array<Object> live = new array<Object>();
-		foreach (HOD_OBObject o : obSet.Objects)
+		foreach (HOD_OBObject o : obSet.objects)
 			live.Insert(Server_SpawnObject(o));
-		m_Live.Set(obSet.Name, live);
+		m_Live.Set(obSet.name, live);
 	}
 
 	protected void Server_DespawnSet(string name)
@@ -180,16 +180,16 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 	// keep the live object for one index in sync with its data
 	protected void Server_RespawnIndex(HOD_OBSet obSet, int idx)
 	{
-		if (!obSet.Active)
+		if (!obSet.active)
 			return;
 		array<Object> live;
-		if (!m_Live.Find(obSet.Name, live))
+		if (!m_Live.Find(obSet.name, live))
 			return;
-		while (live.Count() < obSet.Objects.Count())
+		while (live.Count() < obSet.objects.Count())
 			live.Insert(null);
 		if (live[idx])
 			GetGame().ObjectDelete(live[idx]);
-		live[idx] = Server_SpawnObject(obSet.Objects[idx]);
+		live[idx] = Server_SpawnObject(obSet.objects[idx]);
 	}
 
 	protected bool Server_Allowed(PlayerIdentity sender, string perm)
@@ -204,10 +204,10 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		foreach (string name, HOD_OBSet obSet : m_Sets)
 		{
 			HOD_OBSetInfo info = new HOD_OBSetInfo();
-			info.Name = name;
-			info.Active = obSet.Active;
-			info.Count = obSet.Objects.Count();
-			list.Sets.Insert(info);
+			info.name = name;
+			info.active = obSet.active;
+			info.count = obSet.objects.Count();
+			list.sets.Insert(info);
 		}
 		JsonSerializer js = new JsonSerializer();
 		string json;
@@ -256,7 +256,7 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 			return;
 		}
 		HOD_OBSet obSet = new HOD_OBSet();
-		obSet.Name = name;
+		obSet.name = name;
 		m_Sets.Set(name, obSet);
 		m_Live.Set(name, new array<Object>());
 		Server_Save(obSet);
@@ -287,15 +287,15 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		HOD_OBSet obSet;
 		if (!m_Sets.Find(p.param1, obSet))
 			return;
-		obSet.Active = p.param2;
-		if (obSet.Active)
+		obSet.active = p.param2;
+		if (obSet.active)
 			Server_SpawnSet(obSet);
 		else
-			Server_DespawnSet(obSet.Name);
+			Server_DespawnSet(obSet.name);
 		Server_Save(obSet);
-		Server_Log(sender, string.Format("set %1 active=%2", obSet.Name, obSet.Active));
+		Server_Log(sender, string.Format("set %1 active=%2", obSet.name, obSet.active));
 		Server_SendList(sender);
-		Server_SendSet(sender, obSet.Name);
+		Server_SendSet(sender, obSet.name);
 	}
 
 	void AddObject(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
@@ -312,11 +312,11 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 			COTCreateNotification(sender, new StringLocaliser("Object Builder: unknown class " + cls));
 			return;
 		}
-		obSet.Objects.Insert(new HOD_OBObject(cls, p.param3, p.param4));
-		Server_RespawnIndex(obSet, obSet.Objects.Count() - 1);
+		obSet.objects.Insert(new HOD_OBObject(cls, p.param3, p.param4));
+		Server_RespawnIndex(obSet, obSet.objects.Count() - 1);
 		Server_Save(obSet);
-		Server_Log(sender, string.Format("%1: added %2 at %3", obSet.Name, cls, p.param3));
-		Server_SendSet(sender, obSet.Name);
+		Server_Log(sender, string.Format("%1: added %2 at %3", obSet.name, cls, p.param3));
+		Server_SendSet(sender, obSet.name);
 	}
 
 	void UpdateObject(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
@@ -328,13 +328,13 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		if (!m_Sets.Find(p.param1, obSet))
 			return;
 		int idx = p.param2;
-		if (idx < 0 || idx >= obSet.Objects.Count())
+		if (idx < 0 || idx >= obSet.objects.Count())
 			return;
-		obSet.Objects[idx].Position = p.param3;
-		obSet.Objects[idx].Orientation = p.param4;
+		obSet.objects[idx].position = p.param3;
+		obSet.objects[idx].orientation = p.param4;
 		Server_RespawnIndex(obSet, idx);
 		Server_Save(obSet);
-		Server_SendSet(sender, obSet.Name);
+		Server_SendSet(sender, obSet.name);
 	}
 
 	void RemoveObject(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
@@ -346,19 +346,19 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		if (!m_Sets.Find(p.param1, obSet))
 			return;
 		int idx = p.param2;
-		if (idx < 0 || idx >= obSet.Objects.Count())
+		if (idx < 0 || idx >= obSet.objects.Count())
 			return;
 		array<Object> live;
-		if (m_Live.Find(obSet.Name, live) && idx < live.Count())
+		if (m_Live.Find(obSet.name, live) && idx < live.Count())
 		{
 			if (live[idx])
 				GetGame().ObjectDelete(live[idx]);
 			live.Remove(idx);
 		}
-		Server_Log(sender, string.Format("%1: removed %2", obSet.Name, obSet.Objects[idx].Type));
-		obSet.Objects.Remove(idx);
+		Server_Log(sender, string.Format("%1: removed %2", obSet.name, obSet.objects[idx].type));
+		obSet.objects.Remove(idx);
 		Server_Save(obSet);
-		Server_SendSet(sender, obSet.Name);
+		Server_SendSet(sender, obSet.name);
 	}
 
 	// =============================================================== client
@@ -384,11 +384,11 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		HOD_OBSet obSet = HOD_OBSet.FromJson(p.param1);
 		if (!obSet)
 			return;
-		if (!m_ClientSet || m_ClientSet.Name != obSet.Name)
+		if (!m_ClientSet || m_ClientSet.name != obSet.name)
 			m_SelectedIndex = -1;
 		m_ClientSet = obSet;
-		if (m_SelectedIndex >= obSet.Objects.Count())
-			m_SelectedIndex = obSet.Objects.Count() - 1;
+		if (m_SelectedIndex >= obSet.objects.Count())
+			m_SelectedIndex = obSet.objects.Count() - 1;
 		RefreshForm();
 	}
 
@@ -402,15 +402,15 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 	string CurrentSetName()
 	{
 		if (m_ClientSet)
-			return m_ClientSet.Name;
+			return m_ClientSet.name;
 		return "";
 	}
 
 	HOD_OBObject Selected()
 	{
-		if (!m_ClientSet || m_SelectedIndex < 0 || m_SelectedIndex >= m_ClientSet.Objects.Count())
+		if (!m_ClientSet || m_SelectedIndex < 0 || m_SelectedIndex >= m_ClientSet.objects.Count())
 			return null;
-		return m_ClientSet.Objects[m_SelectedIndex];
+		return m_ClientSet.objects[m_SelectedIndex];
 	}
 
 	void Client_RequestList()
@@ -431,7 +431,7 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 	void Client_DeleteSet(string name)
 	{
 		GetRPCManager().SendRPC(RPC_NS, "DeleteSet", new Param1<string>(name), true);
-		if (m_ClientSet && m_ClientSet.Name == name)
+		if (m_ClientSet && m_ClientSet.name == name)
 		{
 			m_ClientSet = null;
 			m_SelectedIndex = -1;
@@ -450,8 +450,8 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 			COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: open or create a set first"));
 			return;
 		}
-		m_SelectedIndex = m_ClientSet.Objects.Count(); // select the new one once it arrives
-		GetRPCManager().SendRPC(RPC_NS, "AddObject", new Param4<string, string, vector, vector>(m_ClientSet.Name, cls, pos, ori), true);
+		m_SelectedIndex = m_ClientSet.objects.Count(); // select the new one once it arrives
+		GetRPCManager().SendRPC(RPC_NS, "AddObject", new Param4<string, string, vector, vector>(m_ClientSet.name, cls, pos, ori), true);
 	}
 
 	void Client_UpdateSelected(vector pos, vector ori)
@@ -459,9 +459,9 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		HOD_OBObject o = Selected();
 		if (!o)
 			return;
-		o.Position = pos;
-		o.Orientation = ori;
-		GetRPCManager().SendRPC(RPC_NS, "UpdateObject", new Param4<string, int, vector, vector>(m_ClientSet.Name, m_SelectedIndex, pos, ori), true);
+		o.position = pos;
+		o.orientation = ori;
+		GetRPCManager().SendRPC(RPC_NS, "UpdateObject", new Param4<string, int, vector, vector>(m_ClientSet.name, m_SelectedIndex, pos, ori), true);
 		RefreshForm();
 	}
 
@@ -469,7 +469,7 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 	{
 		if (!Selected())
 			return;
-		GetRPCManager().SendRPC(RPC_NS, "RemoveObject", new Param2<string, int>(m_ClientSet.Name, m_SelectedIndex), true);
+		GetRPCManager().SendRPC(RPC_NS, "RemoveObject", new Param2<string, int>(m_ClientSet.name, m_SelectedIndex), true);
 		m_SelectedIndex = -1;
 	}
 
@@ -478,9 +478,9 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		HOD_OBObject o = Selected();
 		if (!o)
 			return;
-		vector ori = o.Orientation;
+		vector ori = o.orientation;
 		ori[0] = Math.ModFloat(ori[0] + yaw + 360.0, 360.0);
-		Client_UpdateSelected(o.Position + delta, ori);
+		Client_UpdateSelected(o.position + delta, ori);
 	}
 
 	// Select the set object nearest to whatever the crosshair hits
@@ -491,9 +491,9 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		vector hit = GetCursorPos();
 		int best = -1;
 		float bestDist = 25.0;
-		for (int i = 0; i < m_ClientSet.Objects.Count(); i++)
+		for (int i = 0; i < m_ClientSet.objects.Count(); i++)
 		{
-			float d = vector.Distance(m_ClientSet.Objects[i].Position, hit);
+			float d = vector.Distance(m_ClientSet.objects[i].position, hit);
 			if (d < bestDist)
 			{
 				bestDist = d;

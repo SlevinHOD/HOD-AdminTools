@@ -5,32 +5,32 @@ const string HOD_OB_DIR = "$profile:HOD_AdminTools/ObjectBuilder";
 
 class HOD_OBObject
 {
-	string Type;
-	vector Position;
-	vector Orientation; // yaw pitch roll
+	string type;
+	vector position;
+	vector orientation; // yaw pitch roll
 
-	void HOD_OBObject(string type = "", vector pos = "0 0 0", vector ori = "0 0 0")
+	void HOD_OBObject(string cls = "", vector pos = "0 0 0", vector ori = "0 0 0")
 	{
-		Type = type;
-		Position = pos;
-		Orientation = ori;
+		type = cls;
+		position = pos;
+		orientation = ori;
 	}
 }
 
 class HOD_OBSet
 {
-	string Name;
-	bool Active = true;
-	ref array<ref HOD_OBObject> Objects = new array<ref HOD_OBObject>();
+	string name;
+	bool active = true;
+	ref array<ref HOD_OBObject> objects = new array<ref HOD_OBObject>();
 
 	vector Center()
 	{
 		vector sum = "0 0 0";
-		if (Objects.Count() == 0)
+		if (objects.Count() == 0)
 			return sum;
-		foreach (HOD_OBObject o : Objects)
-			sum = sum + o.Position;
-		return sum * (1.0 / Objects.Count());
+		foreach (HOD_OBObject o : objects)
+			sum = sum + o.position;
+		return sum * (1.0 / objects.Count());
 	}
 
 	string ToJson()
@@ -57,19 +57,19 @@ class HOD_OBSet
 	// init.c style - paste into a mission's init.c (needs the helper printed in the header)
 	string ExportInitC()
 	{
-		string s = "// HOD Object Builder export: " + Name + "\n";
+		string s = "// HOD Object Builder export: " + name + "\n";
 		s += "// void HOD_Spawn(string t, vector p, vector o) { Object obj = GetGame().CreateObjectEx(t, p, ECE_SETUP|ECE_UPDATEPATHGRAPH|ECE_CREATEPHYSICS|ECE_NOLIFETIME); if (obj) { obj.SetPosition(p); obj.SetOrientation(o); obj.Update(); } }\n";
-		foreach (HOD_OBObject o : Objects)
-			s += string.Format("HOD_Spawn(\"%1\", \"%2\", \"%3\");\n", o.Type, HOD_OBSet.Vec(o.Position), HOD_OBSet.Vec(o.Orientation));
+		foreach (HOD_OBObject o : objects)
+			s += string.Format("HOD_Spawn(\"%1\", \"%2\", \"%3\");\n", o.type, HOD_OBSet.Vec(o.position), HOD_OBSet.Vec(o.orientation));
 		return s;
 	}
 
 	// mapgrouppos.xml style lines
 	string ExportXml()
 	{
-		string s = "<!-- HOD Object Builder export: " + Name + " -->\n";
-		foreach (HOD_OBObject o : Objects)
-			s += string.Format("<group name=\"%1\" pos=\"%2\" rpy=\"%3 %4 %5\" a=\"%6\" />\n", o.Type, HOD_OBSet.Vec(o.Position), o.Orientation[2], o.Orientation[1], o.Orientation[0], o.Orientation[0]);
+		string s = "<!-- HOD Object Builder export: " + name + " -->\n";
+		foreach (HOD_OBObject o : objects)
+			s += string.Format("<group name=\"%1\" pos=\"%2\" rpy=\"%3 %4 %5\" a=\"%6\" />\n", o.type, HOD_OBSet.Vec(o.position), o.orientation[2], o.orientation[1], o.orientation[0], o.orientation[0]);
 		return s;
 	}
 
@@ -82,12 +82,12 @@ class HOD_OBSet
 // list entry sent to clients
 class HOD_OBSetInfo
 {
-	string Name;
-	bool Active;
-	int Count;
+	string name;
+	bool active;
+	int count;
 }
 
 class HOD_OBSetList
 {
-	ref array<ref HOD_OBSetInfo> Sets = new array<ref HOD_OBSetInfo>();
+	ref array<ref HOD_OBSetInfo> sets = new array<ref HOD_OBSetInfo>();
 }

@@ -4,28 +4,28 @@
 
 class HOD_TypeEntry
 {
-	string Name;
-	string File;
-	int Nominal = -1;
-	int Min = -1;
-	int Lifetime = -1;
-	int Restock = -1;
-	int QuantMin = -1;
-	int QuantMax = -1;
-	int Cost = -1;
-	string Flags;
-	string Category;
-	string Usages;
-	string Values;
-	string Tags;
-	string Raw;
+	string name;
+	string file;
+	int nominal = -1;
+	int min = -1;
+	int lifetime = -1;
+	int restock = -1;
+	int quantMin = -1;
+	int quantMax = -1;
+	int cost = -1;
+	string flags;
+	string category;
+	string usages;
+	string values;
+	string tags;
+	string raw;
 }
 
 class HOD_TypeResults
 {
-	string Query;
-	int Total;
-	ref array<ref HOD_TypeEntry> Entries = new array<ref HOD_TypeEntry>();
+	string query;
+	int total;
+	ref array<ref HOD_TypeEntry> entries = new array<ref HOD_TypeEntry>();
 }
 
 class HOD_XMLSearchModule : JMRenderableModuleBase
@@ -191,31 +191,31 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 			pos = end;
 
 			HOD_TypeEntry e = new HOD_TypeEntry();
-			e.Name = Attr(head, "name");
-			if (e.Name == "")
+			e.name = Attr(head, "name");
+			if (e.name == "")
 				continue;
-			e.File = relPath;
-			e.Nominal = ElemInt(block, "nominal");
-			e.Min = ElemInt(block, "min");
-			e.Lifetime = ElemInt(block, "lifetime");
-			e.Restock = ElemInt(block, "restock");
-			e.QuantMin = ElemInt(block, "quantmin");
-			e.QuantMax = ElemInt(block, "quantmax");
-			e.Cost = ElemInt(block, "cost");
-			e.Category = ElemNames(block, "category");
-			e.Usages = ElemNames(block, "usage");
-			e.Values = ElemNames(block, "value");
-			e.Tags = ElemNames(block, "tag");
+			e.file = relPath;
+			e.nominal = ElemInt(block, "nominal");
+			e.min = ElemInt(block, "min");
+			e.lifetime = ElemInt(block, "lifetime");
+			e.restock = ElemInt(block, "restock");
+			e.quantMin = ElemInt(block, "quantmin");
+			e.quantMax = ElemInt(block, "quantmax");
+			e.cost = ElemInt(block, "cost");
+			e.category = ElemNames(block, "category");
+			e.usages = ElemNames(block, "usage");
+			e.values = ElemNames(block, "value");
+			e.tags = ElemNames(block, "tag");
 			int fi = block.IndexOf("<flags ");
 			if (fi >= 0)
 			{
 				int fe = block.IndexOfFrom(fi, ">");
 				if (fe > fi)
-					e.Flags = block.Substring(fi + 7, fe - fi - 7);
-				e.Flags.Replace("/", "");
-				e.Flags.TrimInPlace();
+					e.flags = block.Substring(fi + 7, fe - fi - 7);
+				e.flags.Replace("/", "");
+				e.flags.TrimInPlace();
 			}
-			e.Raw = block;
+			e.raw = block;
 			m_Types.Insert(e);
 		}
 	}
@@ -277,18 +277,18 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 		q.ToLower();
 		q.TrimInPlace();
 		HOD_TypeResults res = new HOD_TypeResults();
-		res.Query = p.param1;
+		res.query = p.param1;
 		if (q.Length() >= 2)
 		{
 			foreach (HOD_TypeEntry e : m_Types)
 			{
-				string n = e.Name;
+				string n = e.name;
 				n.ToLower();
 				if (n.IndexOf(q) < 0)
 					continue;
-				res.Total++;
-				if (res.Entries.Count() < MAX_RESULTS)
-					res.Entries.Insert(e);
+				res.total++;
+				if (res.entries.Count() < MAX_RESULTS)
+					res.entries.Insert(e);
 			}
 		}
 		JsonSerializer js = new JsonSerializer();

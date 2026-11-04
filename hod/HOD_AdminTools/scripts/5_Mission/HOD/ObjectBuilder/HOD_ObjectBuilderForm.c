@@ -109,7 +109,7 @@ class HOD_ObjectBuilderForm : JMFormBase
 		super.OnShow();
 		m_Module.Client_RequestList();
 		if (m_Module.m_ClientSet)
-			m_Module.Client_OpenSet(m_Module.m_ClientSet.Name);
+			m_Module.Client_OpenSet(m_Module.m_ClientSet.name);
 		BuildClassIndex();
 		RefreshAll();
 	}
@@ -124,13 +124,13 @@ class HOD_ObjectBuilderForm : JMFormBase
 
 		m_SetsList.ClearItems();
 		int selSet = -1;
-		foreach (HOD_OBSetInfo info : m_Module.m_ClientList.Sets)
+		foreach (HOD_OBSetInfo info : m_Module.m_ClientList.sets)
 		{
 			string state = "  [off]";
-			if (info.Active)
+			if (info.active)
 				state = "  [live]";
-			int row = m_SetsList.AddItem(info.Name + "  (" + info.Count + ")" + state, null, 0);
-			if (info.Name == m_Module.CurrentSetName())
+			int row = m_SetsList.AddItem(info.name + "  (" + info.count + ")" + state, null, 0);
+			if (info.name == m_Module.CurrentSetName())
 				selSet = row;
 		}
 		if (selSet >= 0)
@@ -141,13 +141,13 @@ class HOD_ObjectBuilderForm : JMFormBase
 		if (obSet)
 		{
 			string live = "despawned";
-			if (obSet.Active)
+			if (obSet.active)
 				live = "live";
-			m_ObjectsTitle.SetText(obSet.Name + " - " + obSet.Objects.Count() + " objects, " + live);
-			for (int i = 0; i < obSet.Objects.Count(); i++)
+			m_ObjectsTitle.SetText(obSet.name + " - " + obSet.objects.Count() + " objects, " + live);
+			for (int i = 0; i < obSet.objects.Count(); i++)
 			{
-				HOD_OBObject o = obSet.Objects[i];
-				m_ObjectsList.AddItem(string.Format("%1  %2", i + 1, o.Type), null, 0);
+				HOD_OBObject o = obSet.objects[i];
+				m_ObjectsList.AddItem(string.Format("%1  %2", i + 1, o.type), null, 0);
 			}
 			if (m_Module.m_SelectedIndex >= 0 && m_Module.m_SelectedIndex < m_ObjectsList.GetNumItems())
 			{
@@ -163,9 +163,9 @@ class HOD_ObjectBuilderForm : JMFormBase
 		HOD_OBObject sel = m_Module.Selected();
 		if (sel)
 		{
-			m_SelectedText.SetText(sel.Type);
-			m_PosEdit.SetValue(sel.Position);
-			m_OriEdit.SetValue(sel.Orientation);
+			m_SelectedText.SetText(sel.type);
+			m_PosEdit.SetValue(sel.position);
+			m_OriEdit.SetValue(sel.orientation);
 		}
 		else
 		{
@@ -205,17 +205,17 @@ class HOD_ObjectBuilderForm : JMFormBase
 	protected string SelectedSetName()
 	{
 		int row = m_SetsList.GetSelectedRow();
-		if (row < 0 || row >= m_Module.m_ClientList.Sets.Count())
+		if (row < 0 || row >= m_Module.m_ClientList.sets.Count())
 			return "";
-		return m_Module.m_ClientList.Sets[row].Name;
+		return m_Module.m_ClientList.sets[row].name;
 	}
 
 	protected bool SelectedSetActive()
 	{
 		int row = m_SetsList.GetSelectedRow();
-		if (row < 0 || row >= m_Module.m_ClientList.Sets.Count())
+		if (row < 0 || row >= m_Module.m_ClientList.sets.Count())
 			return false;
-		return m_Module.m_ClientList.Sets[row].Active;
+		return m_Module.m_ClientList.sets[row].active;
 	}
 
 	protected void OpenSelectedSet()
@@ -323,7 +323,7 @@ class HOD_ObjectBuilderForm : JMFormBase
 			return;
 		m_Module.Client_RequestList();
 		if (m_Module.m_ClientSet)
-			m_Module.Client_OpenSet(m_Module.m_ClientSet.Name);
+			m_Module.Client_OpenSet(m_Module.m_ClientSet.name);
 	}
 
 	void Click_ToggleActive(UIEvent eid, UIActionBase action)
@@ -337,7 +337,7 @@ class HOD_ObjectBuilderForm : JMFormBase
 
 	void Click_TeleportSet(UIEvent eid, UIActionBase action)
 	{
-		if (eid != UIEvent.CLICK || !m_Module.m_ClientSet || m_Module.m_ClientSet.Objects.Count() == 0)
+		if (eid != UIEvent.CLICK || !m_Module.m_ClientSet || m_Module.m_ClientSet.objects.Count() == 0)
 			return;
 		JMTeleportModule tp;
 		if (Class.CastTo(tp, GetModuleManager().GetModule(JMTeleportModule)))
@@ -375,7 +375,7 @@ class HOD_ObjectBuilderForm : JMFormBase
 			return;
 		HOD_OBObject o = m_Module.Selected();
 		if (o)
-			m_Module.Client_AddObject(o.Type, o.Position + Vector(StepM(), 0, 0), o.Orientation);
+			m_Module.Client_AddObject(o.type, o.position + Vector(StepM(), 0, 0), o.orientation);
 	}
 
 	void Click_DeleteObject(UIEvent eid, UIActionBase action)
@@ -416,14 +416,14 @@ class HOD_ObjectBuilderForm : JMFormBase
 	{
 		HOD_OBObject o = m_Module.Selected();
 		if (eid == UIEvent.CLICK && o)
-			m_Module.Client_UpdateSelected(m_PosEdit.GetValue(), o.Orientation);
+			m_Module.Client_UpdateSelected(m_PosEdit.GetValue(), o.orientation);
 	}
 
 	void Click_SetOri(UIEvent eid, UIActionBase action)
 	{
 		HOD_OBObject o = m_Module.Selected();
 		if (eid == UIEvent.CLICK && o)
-			m_Module.Client_UpdateSelected(o.Position, m_OriEdit.GetValue());
+			m_Module.Client_UpdateSelected(o.position, m_OriEdit.GetValue());
 	}
 
 	void Change_Step(UIEvent eid, UIActionBase action)
@@ -464,15 +464,15 @@ class HOD_ObjectBuilderForm : JMFormBase
 		HOD_OBObject o = m_Module.Selected();
 		if (eid != UIEvent.CLICK || !o)
 			return;
-		vector p = o.Position;
+		vector p = o.position;
 		p[1] = GetGame().SurfaceY(p[0], p[2]);
-		m_Module.Client_UpdateSelected(p, o.Orientation);
+		m_Module.Client_UpdateSelected(p, o.orientation);
 	}
 
 	void Click_MoveCursor(UIEvent eid, UIActionBase action)
 	{
 		HOD_OBObject o = m_Module.Selected();
 		if (eid == UIEvent.CLICK && o)
-			m_Module.Client_UpdateSelected(GetCursorPos(), o.Orientation);
+			m_Module.Client_UpdateSelected(GetCursorPos(), o.orientation);
 	}
 }

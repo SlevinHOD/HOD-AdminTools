@@ -62,16 +62,16 @@ class HOD_XMLSearchForm : JMFormBase
 		HOD_TypeResults res = m_Module.m_ClientResults;
 		m_Results.ClearItems();
 		m_Selected = -1;
-		foreach (HOD_TypeEntry e : res.Entries)
+		foreach (HOD_TypeEntry e : res.entries)
 		{
-			string line = e.Name + "   n" + Num(e.Nominal) + " / m" + Num(e.Min);
+			string line = e.name + "   n" + Num(e.nominal) + " / m" + Num(e.min);
 			m_Results.AddItem(line, null, 0);
 		}
-		string shown = res.Total.ToString();
-		if (res.Total > res.Entries.Count())
-			shown = res.Entries.Count().ToString() + " of " + res.Total.ToString();
-		m_Count.SetText(shown + " match(es) for '" + res.Query + "'");
-		if (res.Entries.Count() > 0)
+		string shown = res.total.ToString();
+		if (res.total > res.entries.Count())
+			shown = res.entries.Count().ToString() + " of " + res.total.ToString();
+		m_Count.SetText(shown + " match(es) for '" + res.query + "'");
+		if (res.entries.Count() > 0)
 		{
 			m_Results.SelectRow(0);
 			ShowDetails(0);
@@ -101,9 +101,9 @@ class HOD_XMLSearchForm : JMFormBase
 	protected HOD_TypeEntry Entry(int i)
 	{
 		HOD_TypeResults res = m_Module.m_ClientResults;
-		if (i < 0 || i >= res.Entries.Count())
+		if (i < 0 || i >= res.entries.Count())
 			return null;
-		return res.Entries[i];
+		return res.entries[i];
 	}
 
 	protected void ShowDetails(int i)
@@ -116,18 +116,18 @@ class HOD_XMLSearchForm : JMFormBase
 				t.SetText("");
 			return;
 		}
-		m_Details[0].SetText(e.Name);
-		m_Details[1].SetText(e.File);
-		m_Details[2].SetText(Num(e.Nominal) + " / " + Num(e.Min));
-		m_Details[3].SetText(Duration(e.Lifetime));
-		m_Details[4].SetText(Duration(e.Restock));
-		m_Details[5].SetText(Num(e.QuantMin) + " - " + Num(e.QuantMax));
-		m_Details[6].SetText(Num(e.Cost));
-		m_Details[7].SetText(e.Category);
-		m_Details[8].SetText(e.Usages);
-		m_Details[9].SetText(e.Values);
-		m_Details[10].SetText(e.Tags);
-		m_Details[11].SetText(e.Flags);
+		m_Details[0].SetText(e.name);
+		m_Details[1].SetText(e.file);
+		m_Details[2].SetText(Num(e.nominal) + " / " + Num(e.min));
+		m_Details[3].SetText(Duration(e.lifetime));
+		m_Details[4].SetText(Duration(e.restock));
+		m_Details[5].SetText(Num(e.quantMin) + " - " + Num(e.quantMax));
+		m_Details[6].SetText(Num(e.cost));
+		m_Details[7].SetText(e.category);
+		m_Details[8].SetText(e.usages);
+		m_Details[9].SetText(e.values);
+		m_Details[10].SetText(e.tags);
+		m_Details[11].SetText(e.flags);
 	}
 
 	override bool OnItemSelected(Widget w, int x, int y, int row, int column, int oldRow, int oldColumn)
@@ -145,8 +145,8 @@ class HOD_XMLSearchForm : JMFormBase
 		HOD_TypeEntry e = Entry(m_Selected);
 		if (eid != UIEvent.CLICK || !e)
 			return;
-		GetGame().CopyToClipboard(e.Name);
-		COTCreateLocalAdminNotification(new StringLocaliser("Copied " + e.Name));
+		GetGame().CopyToClipboard(e.name);
+		COTCreateLocalAdminNotification(new StringLocaliser("Copied " + e.name));
 	}
 
 	void Click_CopyXml(UIEvent eid, UIActionBase action)
@@ -154,7 +154,7 @@ class HOD_XMLSearchForm : JMFormBase
 		HOD_TypeEntry e = Entry(m_Selected);
 		if (eid != UIEvent.CLICK || !e)
 			return;
-		GetGame().CopyToClipboard(e.Raw);
-		COTCreateLocalAdminNotification(new StringLocaliser("Copied XML for " + e.Name));
+		GetGame().CopyToClipboard(e.raw);
+		COTCreateLocalAdminNotification(new StringLocaliser("Copied XML for " + e.name));
 	}
 }
