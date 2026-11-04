@@ -1,0 +1,121 @@
+PanelWidgetClass HOD_ObjectBuilderForm {
+ color 0 0 0 0
+ position 0 0
+ size 820 560
+ hexactpos 0
+ vexactpos 0
+ hexactsize 1
+ vexactsize 1
+ scriptclass "HOD_ObjectBuilderForm"
+ style DayZDefaultPanel
+ {
+  GridSpacerWidgetClass sets_header {
+   position 0 0
+   size 260 30
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   "Size To Content V" 1
+   Columns 1
+   Rows 2
+  }
+  TextListboxWidgetClass sets_list {
+   visible 1
+   position 5 64
+   size 250 190
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   style Editor
+   lines 20
+   font "gui/fonts/sdf_MetronLight24"
+   "exact text" 1
+   "exact text size" 16
+  }
+  GridSpacerWidgetClass sets_wrapper {
+   position 0 258
+   size 260 30
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   "Size To Content V" 1
+   Columns 1
+   Rows 6
+  }
+  GridSpacerWidgetClass objects_header {
+   position 265 0
+   size 280 30
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   "Size To Content V" 1
+   Columns 1
+   Rows 1
+  }
+  TextListboxWidgetClass objects_list {
+   visible 1
+   position 270 34
+   size 270 300
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   style Editor
+   lines 20
+   font "gui/fonts/sdf_MetronLight24"
+   "exact text" 1
+   "exact text size" 16
+  }
+  GridSpacerWidgetClass objects_wrapper {
+   position 265 338
+   size 280 30
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   "Size To Content V" 1
+   Columns 1
+   Rows 6
+  }
+  GridSpacerWidgetClass search_wrapper {
+   position 550 0
+   size 270 30
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   "Size To Content V" 1
+   Columns 1
+   Rows 1
+  }
+  TextListboxWidgetClass class_list {
+   visible 1
+   position 555 34
+   size 260 180
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   style Editor
+   lines 20
+   font "gui/fonts/sdf_MetronLight24"
+   "exact text" 1
+   "exact text size" 16
+  }
+  GridSpacerWidgetClass edit_wrapper {
+   position 550 218
+   size 270 30
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   "Size To Content V" 1
+   Columns 1
+   Rows 10
+  }
+ }
+}

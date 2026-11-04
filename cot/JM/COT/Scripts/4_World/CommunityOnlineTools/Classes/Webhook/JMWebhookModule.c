@@ -434,7 +434,8 @@ class JMWebhookModule: JMModuleBase
 		auto embed = message.CreateEmbed();
 		embed.SetColor( 16766720 );
 
-		embed.SetAuthor( "Community Online Tools", "https://steamcommunity.com/sharedfiles/filedetails/?id=1564026768", "https://steamuserimages-a.akamaihd.net/ugc/960854969917124348/1A32B80495D9F205E4D91C61AE309D19A44A8B92/" );
+		embed.SetAuthor( "HOD Admin Tools", // HOD: branding
+			 "https://steamcommunity.com/sharedfiles/filedetails/?id=1564026768", "https://steamuserimages-a.akamaihd.net/ugc/960854969917124348/1A32B80495D9F205E4D91C61AE309D19A44A8B92/" );
 		
 		if ( m_ServerHostName != "" )
 			embed.AddField( "Server:", m_ServerHostName, false );
@@ -452,7 +453,8 @@ class JMWebhookModule: JMModuleBase
 		auto embed = message.CreateEmbed();
 		embed.SetColor( 16766720 );
 
-		embed.SetAuthor( "Community Online Tools", "https://steamcommunity.com/sharedfiles/filedetails/?id=1564026768", "https://steamuserimages-a.akamaihd.net/ugc/960854969917124348/1A32B80495D9F205E4D91C61AE309D19A44A8B92/" );
+		embed.SetAuthor( "HOD Admin Tools", // HOD: branding
+			 "https://steamcommunity.com/sharedfiles/filedetails/?id=1564026768", "https://steamuserimages-a.akamaihd.net/ugc/960854969917124348/1A32B80495D9F205E4D91C61AE309D19A44A8B92/" );
 
 		if ( m_ServerHostName != "" )
 			embed.AddField( "Server:", m_ServerHostName, true );

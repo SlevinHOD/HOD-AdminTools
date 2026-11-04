@@ -1,5 +1,5 @@
 PanelWidgetClass JMCOTSideBar {
- color 0.03 0.04 0.06 0.9
+ color 0.04 0.055 0.043 0.9
  priority 100
  position 0 0
  size 300 1
@@ -26,12 +26,12 @@ PanelWidgetClass JMCOTSideBar {
    {
     TextWidgetClass TitleBarText {
      visible 1
-     color 1 1 1 1
+     color 0.831 0.686 0.216 1
      position 0 0.2
      size 1 0.8
      halign center_ref
      valign center_ref
-     text "Community Online Tools"
+     text "HOD Admin Tools"
      "exact text" 1
      "exact text size" 28
      "bold text" 1

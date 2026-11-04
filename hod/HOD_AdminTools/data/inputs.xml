@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<modded_inputs>
+	<inputs>
+		<actions>
+			<input name="UAZenCOT_CopyPosition" loc="ZenCOT - Copy position at cursor"/>
+			<input name="UAHODOBSelect" loc="HOD Object Builder - Select object (build mode)"/>
+			<input name="UAHODOBDeselect" loc="HOD Object Builder - Deselect (build mode)"/>
+			<input name="UAHODOBRotateLeft" loc="HOD Object Builder - Rotate left (build mode)"/>
+			<input name="UAHODOBRotateRight" loc="HOD Object Builder - Rotate right (build mode)"/>
+			<input name="UAHODOBDelete" loc="HOD Object Builder - Delete selected (build mode)"/>
+		</actions>
+		<sorting name="hod" loc="HOD Admin Tools">
+			<input name="UAZenCOT_CopyPosition"/>
+			<input name="UAHODOBSelect"/>
+			<input name="UAHODOBDeselect"/>
+			<input name="UAHODOBRotateLeft"/>
+			<input name="UAHODOBRotateRight"/>
+			<input name="UAHODOBDelete"/>
+		</sorting>
+	</inputs>
+	<preset>
+		<input name="UAZenCOT_CopyPosition">
+			<btn name="kP"/>
+		</input>
+		<input name="UAHODOBSelect">
+			<btn name="mBLeft"/>
+		</input>
+		<input name="UAHODOBDeselect">
+			<btn name="kLControl"/>
+		</input>
+		<input name="UAHODOBRotateLeft">
+			<btn name="mWheelUp"/>
+		</input>
+		<input name="UAHODOBRotateRight">
+			<btn name="mWheelDown"/>
+		</input>
+		<input name="UAHODOBDelete">
+			<btn name="kDelete"/>
+		</input>
+	</preset>
+</modded_inputs>

@@ -23,8 +23,8 @@ class CfgMods
 		action = "";
 		hideName = 1;
 		hidePicture = 1;
-		name = "Community Online Tools";
-		credits = "Jacob_Mango, DannyDog, Arkensor, LiquidRock, LieutenantMaster";
+		name = "HOD Admin Tools"; // HOD: fork of Community Online Tools
+		credits = "House of D | based on Community Online Tools by Jacob_Mango, DannyDog, Arkensor, LiquidRock, LieutenantMaster"; // HOD:
 		creditsJson = "JM/COT/Scripts/Data/Credits.json";
 		author = "Jacob_Mango";
 		authorID = "0";

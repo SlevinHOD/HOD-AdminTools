@@ -185,7 +185,7 @@ class JMCOTSideBar: COT_ScriptedWidgetEventHandler
 			if (m_AnimateTime == 0)
 			{
 				if (m_IsTargetCompact)
-					m_TitleBarText.SetText("COT");
+					m_TitleBarText.SetText("HOD"); // HOD: branding
 			}
 
 			m_AnimateTime += timeslice;
@@ -229,7 +229,7 @@ class JMCOTSideBar: COT_ScriptedWidgetEventHandler
 				if ( m_IsAnimatingOut )
 					m_LayoutRoot.Show( false );
 				else if (!m_IsTargetCompact)
-					m_TitleBarText.SetText("Community Online Tools");
+					m_TitleBarText.SetText("HOD Admin Tools"); // HOD: branding
 
 				m_IsAnimatingIn = false;
 				m_IsAnimatingOut = false;

@@ -1,0 +1,49 @@
+PanelWidgetClass HOD_XMLSearchForm {
+ color 0 0 0 0
+ position 0 0
+ size 780 520
+ hexactpos 0
+ vexactpos 0
+ hexactsize 1
+ vexactsize 1
+ scriptclass "HOD_XMLSearchForm"
+ style DayZDefaultPanel
+ {
+  GridSpacerWidgetClass xml_search {
+   position 0 0
+   size 780 30
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   "Size To Content V" 1
+   Columns 1
+   Rows 2
+  }
+  TextListboxWidgetClass xml_results {
+   visible 1
+   position 5 64
+   size 380 440
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   style Editor
+   lines 20
+   font "gui/fonts/sdf_MetronLight24"
+   "exact text" 1
+   "exact text size" 16
+  }
+  GridSpacerWidgetClass xml_details {
+   position 390 64
+   size 390 30
+   hexactpos 1
+   vexactpos 1
+   hexactsize 1
+   vexactsize 1
+   "Size To Content V" 1
+   Columns 1
+   Rows 14
+  }
+ }
+}

@@ -10,7 +10,7 @@ import struct
 import sys
 import time
 
-SKIP_EXT = {".pyc", ".bak", ".tmp"}
+SKIP_EXT = {".pyc", ".bak", ".tmp", ".meta"}
 SKIP_NAMES = {".git", ".DS_Store", "Thumbs.db", "$PREFIX$"}
 
 

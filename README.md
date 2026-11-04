@@ -1,10 +1,10 @@
 # HOD Admin Tools
 
-House of D admin tools for DayZ. Written from scratch (no VPP or COT code), Expansion-aware.
+House of D admin tools for DayZ: a fork of **Community Online Tools** with Object Builder,
+XML Search and ZenCOT features added. Drop-in replacement for COT; Expansion's COT
+integration keeps working.
 
 Code: CC BY-SA 4.0. HOD branding: all rights reserved. See [NOTICE.md](NOTICE.md).
-
-![menu preview](docs/menu_preview.png)
 
 ## Build (Linux, no DayZ Tools needed)
     ./build.sh
@@ -13,16 +13,15 @@ Output: `dist/@HOD_AdminTools/` and `dist/HOD_AdminTools_test.zip` (unsigned tes
 ## Layout
 | Path | What |
 |---|---|
-| `src/HOD_AdminTools/` | PBO root (prefix `HOD_AdminTools`) |
-| `scripts/3_Game` | RPC transport, JSON configs, permissions, logger/Discord |
-| `scripts/4_World` | Server handler (all permission checks), Expansion bridge, vehicle tracker |
-| `scripts/5_Mission` | Mission hooks, client state, admin menu UI |
-| `tools/` | `pbo.py` packer, `img2paa.py` (DXT5 PAA), `gen_layouts.py`, `check_scripts.py` |
+| `cot/JM/COT/` | COT fork (upstream 85d7f4d). HOD edits marked `// HOD:`; see `cot/UPSTREAM.md` |
+| `hod/HOD_AdminTools/` | HOD addon PBO: Object Builder, XML Search, ZenCOT features, HOD tweaks |
+| `tools/` | `pbo.py` packer, `img2paa.py` (DXT5 PAA), `check_scripts.py` |
 | `branding/` | Source logo art |
-| `docs/` | Server readme, example profile JSON, menu preview |
+| `docs/` | Server readme |
 
-## Expansion
-All Expansion calls sit behind Expansion's own defines (`EXPANSIONMODVEHICLE`, `EXPANSIONMODBASEBUILDING`, `EXPANSIONMODMARKET`, `EXPANSIONMODCORE`), so the same PBO runs with or without Expansion.
+## Pulling COT updates
+Diff upstream against `cot/UPSTREAM.md`'s commit, copy changed files into `cot/JM/COT`,
+then re-apply anything marked `// HOD:` (branding only).
 
 ## Status
-0.1.0-test - not yet compiled by the DayZ engine. Check `script.log` / `crash.log` on first boot.
+0.2.0-test - not yet compiled by the DayZ engine. Check `script.log` on first boot.

@@ -1,43 +1,37 @@
-HOD ADMIN TOOLS - TEST BUILD 0.1.0
-House of D
+HOD ADMIN TOOLS 0.2.0 - TEST BUILD
+House of D | based on Community Online Tools (Jacob_Mango & team, CC BY-SA 4.0)
 
-INSTALL (server)
- 1. Copy @HOD_AdminTools to the server root.
- 2. Add it to -mod= (clients need it too - it carries the UI).
-      -mod=@CF;@DayZ-Expansion-Core;...;@HOD_AdminTools
-    Load order doesn't matter. Expansion is optional - Expansion features
-    switch on automatically when Expansion is loaded.
- 3. Unsigned test build: set verifySignatures = 0 in serverDZ.cfg, or sign
-    it (see Keys/README.txt).
- 4. Start once. Configs are created in:  <profiles>/HOD_AdminTools/
-      Admins.json    - who is admin + permission groups
-      Settings.json  - Discord webhook, server name, limits
-      Bans.json      - managed in-game
-      Teleports/<map>.json - teleport presets, editable in-game
-      Logs/          - every admin action, one file per day
-    Examples are in ServerProfile/ in this folder.
- 5. Put your Steam64 ID in Admins.json, restart (or use RELOAD in-game).
+WHAT THIS IS
+  A drop-in replacement for COT. Everything COT does, plus:
+   - Object Builder   building sets: place, move, rotate, save, spawn on boot, export
+   - XML Search       search the server's types.xml files (incl. Expansion types)
+   - ZenCOT features  show all of a type on the map, clear markers, lifetime display,
+                      copy cursor position (P), admin base-build helpers (Zenarchist)
+   - HOD tweaks       confirm dialogs before deleting territories / objects / ESP objects
+  Expansion's own COT integration (territories, groups, vehicle keys, ESP extras)
+  keeps working because COT's internal names are unchanged.
 
-IN GAME
-  Home            open / close the admin menu
-  LCtrl + End     teleport to crosshair
-  (rebind under Options > Controls > HOD Admin Tools)
+INSTALL
+ 1. REMOVE the official @Community-Online-Tools from -mod= (they can't both load).
+ 2. Keep @CF. Add @HOD_AdminTools to -mod= on server and clients.
+      -mod=@CF;@DayZ-Expansion-...;@HOD_AdminTools
+ 3. Your existing COT config carries over: same profile folder (CommunityOnlineTools),
+    same permissions/roles files.
+ 4. Unsigned test build: set verifySignatures = 0, or sign it (see Keys/README.txt).
 
-PERMISSIONS
-  players.view players.heal players.kill players.teleport players.kick
-  players.ban players.godmode players.message
-  items.spawn items.spawnothers
-  teleport.self teleport.edit
-  world.delete world.repair world.weather world.time
-  server.broadcast  self.godmode  self.heal
-  expansion.vehicles expansion.codelocks expansion.atm
-  vehicles.view  (server-wide VEHICLES tab)
-  "*" = everything, "players.*" = every players permission.
-  RELOAD in-game needs "*".
+NEW PERMISSIONS (add to your COT roles)
+  HOD.ObjectBuilder.View   open the Object Builder
+  HOD.ObjectBuilder.Edit   create/delete sets, place/move/delete objects
+  HOD.XMLSearch.View       open XML Search
 
-EXPANSION FEATURES (only when the matching Expansion module is loaded)
-  Vehicles      unlock, give paired key, unpair all keys
-  BaseBuilding  show / remove code on doors, gates, safes, tents
-  Market        add / remove ATM money for a player
-  Core          admin messages use Expansion notifications
-  Godmode is re-applied every few seconds so safezone exits can't strip it.
+OBJECT BUILDER
+  Sets are saved to <profiles>/HOD_AdminTools/ObjectBuilder/<name>.json and
+  "live" sets are spawned on every server start. Use Copy init.c / Copy XML to bake a
+  finished set into your mission instead.
+  Build-mode hotkeys (tick the checkbox): left click select, Left Ctrl deselect,
+  mouse wheel rotate, Delete removes the selected object. Rebind under
+  Options > Controls > HOD Admin Tools. Holster your weapon in build mode.
+
+XML SEARCH
+  Reads $mission:db/types.xml plus every type="types" file listed in
+  cfgeconomycore.xml. Read-only. "Re-read files" after you edit them.

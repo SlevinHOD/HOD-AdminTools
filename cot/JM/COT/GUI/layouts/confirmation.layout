@@ -1,6 +1,6 @@
 PanelWidgetClass confirmation_panel_inner {
  ignorepointer 1
- color 0.12 0.16 0.22 1
+ color 0.133 0.188 0.149 1
  position 0 0
  size 350 130
  halign center_ref

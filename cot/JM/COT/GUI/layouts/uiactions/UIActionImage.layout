@@ -36,7 +36,7 @@ PanelWidgetClass UIActionImage {
    visible 0
    clipchildren 0
    ignorepointer 0
-   color 0.06 0.08 0.11 0.996
+   color 0.047 0.059 0.047 0.996
    position 0 0
    size 1.1 1.1
    halign center_ref
