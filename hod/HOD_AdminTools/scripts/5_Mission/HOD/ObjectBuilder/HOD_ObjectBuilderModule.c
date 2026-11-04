@@ -305,7 +305,10 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 			return;
 		HOD_OBSet obSet;
 		if (!m_Sets.Find(p.param1, obSet))
+		{
+			COTCreateNotification(sender, new StringLocaliser("Object Builder: set '" + p.param1 + "' not found on server"));
 			return;
+		}
 		string cls = p.param2;
 		if (!GetGame().ConfigIsExisting("CfgVehicles " + cls) && !GetGame().ConfigIsExisting("CfgNonAIVehicles " + cls))
 		{
@@ -314,6 +317,14 @@ class HOD_ObjectBuilderModule : JMRenderableModuleBase
 		}
 		obSet.objects.Insert(new HOD_OBObject(cls, p.param3, p.param4));
 		Server_RespawnIndex(obSet, obSet.objects.Count() - 1);
+		if (obSet.active)
+		{
+			array<Object> live;
+			if (!m_Live.Find(obSet.name, live) || live.Count() == 0 || !live[live.Count() - 1])
+				COTCreateNotification(sender, new StringLocaliser("Object Builder: saved " + cls + " but the engine refused to spawn it"));
+		}
+		else
+			COTCreateNotification(sender, new StringLocaliser("Object Builder: saved " + cls + " (set is despawned - Spawn it to see objects)"));
 		Server_Save(obSet);
 		Server_Log(sender, string.Format("%1: added %2 at %3", obSet.name, cls, p.param3));
 		Server_SendSet(sender, obSet.name);

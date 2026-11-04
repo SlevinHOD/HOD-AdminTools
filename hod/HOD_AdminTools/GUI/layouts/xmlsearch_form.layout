@@ -43,7 +43,7 @@ PanelWidgetClass HOD_XMLSearchForm {
    vexactsize 1
    "Size To Content V" 1
    Columns 1
-   Rows 14
+   Rows 17
   }
  }
 }

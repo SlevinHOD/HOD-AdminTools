@@ -118,7 +118,7 @@ modded class JMObjectSpawnerModule
 			positions.Insert(entity.GetPosition());
 		}
 		
-		GetRPCManager().SendRPC("ZenCOT_RPC", "RPC_ZenShowOnMapSend", new Param2<ref array<string>, ref array<vector>>(names, positions), true, null);
+		GetRPCManager().SendRPC("ZenCOT_RPC", "RPC_ZenShowOnMapSend", new Param2<ref array<string>, ref array<vector>>(names, positions), true, sender); // HOD: was null (sent item positions to every client)
 	}
 
 	// Client -> server receives 

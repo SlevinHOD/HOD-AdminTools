@@ -19,6 +19,11 @@ class HOD_TypeEntry
 	string values;
 	string tags;
 	string raw;
+	// live world data (filled per request, not cached)
+	int onMap;
+	int inWorld;     // lying in the world / placed (no parent)
+	int inCargo;     // inside players, containers, vehicles
+	bool inTypes = true;
 }
 
 // compact search hit - full details are fetched per item (keeps RPCs small)
@@ -27,6 +32,8 @@ class HOD_TypeBrief
 	string name;
 	int nominal;
 	int min;
+	int onMap;     // live count from the entity tracker
+	bool inTypes;  // false = exists in the world but not in any types.xml
 }
 
 class HOD_TypeResults
@@ -48,6 +55,7 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 	protected ref array<ref HOD_TypeEntry> m_Types;     // server
 	protected ref map<string, int> m_SeenFiles;         // server
 	protected int m_Unreadable;                         // server
+	protected ref map<string, int> m_TypeIndex;         // server: class name -> index in m_Types
 	ref HOD_TypeEntry m_ClientDetail;                   // client
 	ref HOD_TypeResults m_ClientResults;                // client
 
@@ -98,6 +106,9 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 		m_Unreadable = 0;
 		ParseTypesFile("db/types.xml");
 		ParseEconomyCore();
+		m_TypeIndex = new map<string, int>();
+		for (int ti = 0; ti < m_Types.Count(); ti++)
+			m_TypeIndex.Set(m_Types[ti].name, ti);
 		Print("[HOD] XML search indexed " + m_Types.Count() + " types");
 	}
 
@@ -278,6 +289,34 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 		}
 	}
 
+	// =============================================================== server: live world counts
+
+	static int LiveCount(string cls)
+	{
+		array<EntityAI> bucket;
+		if (ZenEntityTracker.m_EntitiesByType.Find(cls, bucket))
+			return bucket.Count();
+		return 0;
+	}
+
+	static void LiveSplit(string cls, out int inWorld, out int inCargo)
+	{
+		inWorld = 0;
+		inCargo = 0;
+		array<EntityAI> bucket;
+		if (!ZenEntityTracker.m_EntitiesByType.Find(cls, bucket))
+			return;
+		foreach (EntityAI e : bucket)
+		{
+			if (!e)
+				continue;
+			if (e.GetHierarchyParent())
+				inCargo++;
+			else
+				inWorld++;
+		}
+	}
+
 	// =============================================================== server: RPC
 
 	void Search(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
@@ -313,14 +352,40 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 					b.name = e.name;
 					b.nominal = e.nominal;
 					b.min = e.min;
+					b.onMap = LiveCount(e.name);
+					b.inTypes = true;
 					res.entries.Insert(b);
 				}
+			}
+
+			// like VPP: classes that exist in the world but aren't in any types.xml (events, traders, mods)
+			foreach (string cls, array<EntityAI> bucket : ZenEntityTracker.m_EntitiesByType)
+			{
+				string lc = cls;
+				lc.ToLower();
+				if (lc.IndexOf(q) < 0 || HasType(cls))
+					continue;
+				res.total++;
+				if (res.entries.Count() >= MAX_RESULTS)
+					continue;
+				HOD_TypeBrief x = new HOD_TypeBrief();
+				x.name = cls;
+				x.nominal = -1;
+				x.min = -1;
+				x.onMap = bucket.Count();
+				x.inTypes = false;
+				res.entries.Insert(x);
 			}
 		}
 		JsonSerializer js = new JsonSerializer();
 		string json;
 		js.WriteToString(res, false, json);
 		GetRPCManager().SendRPC(RPC_NS, "Results", new Param1<string>(json), true, sender);
+	}
+
+	protected bool HasType(string cls)
+	{
+		return m_TypeIndex && m_TypeIndex.Contains(cls);
 	}
 
 	void Detail(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
@@ -332,16 +397,34 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 		if (!GetPermissionsManager().HasPermission(PERM_VIEW, sender, inst))
 			return;
 		Server_EnsureLoaded();
-		foreach (HOD_TypeEntry e : m_Types)
+		HOD_TypeEntry found = null;
+		int idx;
+		if (m_TypeIndex && m_TypeIndex.Find(p.param1, idx))
+			found = m_Types[idx];
+		HOD_TypeEntry out_e = new HOD_TypeEntry();
+		if (found)
 		{
-			if (e.name != p.param1)
-				continue;
-			JsonSerializer js = new JsonSerializer();
-			string json;
-			js.WriteToString(e, false, json);
-			GetRPCManager().SendRPC(RPC_NS, "DetailData", new Param1<string>(json), true, sender);
-			return;
+			JsonSerializer copy = new JsonSerializer();
+			string tmp;
+			string err;
+			copy.WriteToString(found, false, tmp);
+			copy.ReadFromString(out_e, tmp, err);
 		}
+		else
+		{
+			out_e.name = p.param1;
+			out_e.file = "(not in any types.xml)";
+			out_e.inTypes = false;
+		}
+		int w, c;
+		LiveSplit(p.param1, w, c);
+		out_e.inWorld = w;
+		out_e.inCargo = c;
+		out_e.onMap = w + c;
+		JsonSerializer js = new JsonSerializer();
+		string json;
+		js.WriteToString(out_e, false, json);
+		GetRPCManager().SendRPC(RPC_NS, "DetailData", new Param1<string>(json), true, sender);
 	}
 
 	void Reload(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)

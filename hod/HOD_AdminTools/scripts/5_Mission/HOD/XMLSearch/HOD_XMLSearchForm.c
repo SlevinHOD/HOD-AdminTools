@@ -26,10 +26,12 @@ class HOD_XMLSearchForm : JMFormBase
 		m_Results = TextListboxWidget.Cast(layoutRoot.FindAnyWidget("xml_results"));
 
 		Widget det = layoutRoot.FindAnyWidget("xml_details");
-		array<string> labels = {"Class", "File", "Nominal / Min", "Lifetime", "Restock", "Quantity", "Cost", "Category", "Usage", "Value (tier)", "Tags", "Flags"};
+		array<string> labels = {"Class", "On map now", "File", "Nominal / Min", "Lifetime", "Restock", "Quantity", "Cost", "Category", "Usage", "Value (tier)", "Tags", "Flags"};
 		foreach (string l : labels)
 			m_Details.Insert(UIActionManager.CreateText(det, l + ":", ""));
 		Widget btns = UIActionManager.CreateGridSpacer(det, 1, 2);
+		UIActionButton showMapBtn = UIActionManager.CreateButton(det, "Show all on map", this, "Click_ShowOnMap");
+		showMapBtn.SetColor(COLOR_GREEN);
 		UIActionManager.CreateButton(btns, "Copy class name", this, "Click_CopyName");
 		UIActionManager.CreateButton(btns, "Copy XML block", this, "Click_CopyXml");
 	}
@@ -113,7 +115,14 @@ class HOD_XMLSearchForm : JMFormBase
 		m_Results.ClearItems();
 		m_Selected = -1;
 		foreach (HOD_TypeBrief b : res.entries)
-			m_Results.AddItem(b.name + "   n" + Num(b.nominal) + " / m" + Num(b.min), null, 0);
+		{
+			string line = b.name + "   map: " + b.onMap.ToString();
+			if (b.inTypes)
+				line += "   n" + Num(b.nominal) + " / m" + Num(b.min);
+			else
+				line += "   (not in types)";
+			m_Results.AddItem(line, null, 0);
+		}
 
 		string info = string.Format("  [%1 types from %2 file(s)", res.indexed, res.files);
 		if (res.unreadable > 0)
@@ -180,17 +189,18 @@ class HOD_XMLSearchForm : JMFormBase
 			return;
 		}
 		m_Details[0].SetText(e.name);
-		m_Details[1].SetText(e.file);
-		m_Details[2].SetText(Num(e.nominal) + " / " + Num(e.min));
-		m_Details[3].SetText(Duration(e.lifetime));
-		m_Details[4].SetText(Duration(e.restock));
-		m_Details[5].SetText(Num(e.quantMin) + " - " + Num(e.quantMax));
-		m_Details[6].SetText(Num(e.cost));
-		m_Details[7].SetText(e.category);
-		m_Details[8].SetText(e.usages);
-		m_Details[9].SetText(e.values);
-		m_Details[10].SetText(e.tags);
-		m_Details[11].SetText(e.flags);
+		m_Details[1].SetText(string.Format("%1  (%2 in world, %3 in inventories/containers)", e.onMap, e.inWorld, e.inCargo));
+		m_Details[2].SetText(e.file);
+		m_Details[3].SetText(Num(e.nominal) + " / " + Num(e.min));
+		m_Details[4].SetText(Duration(e.lifetime));
+		m_Details[5].SetText(Duration(e.restock));
+		m_Details[6].SetText(Num(e.quantMin) + " - " + Num(e.quantMax));
+		m_Details[7].SetText(Num(e.cost));
+		m_Details[8].SetText(e.category);
+		m_Details[9].SetText(e.usages);
+		m_Details[10].SetText(e.values);
+		m_Details[11].SetText(e.tags);
+		m_Details[12].SetText(e.flags);
 	}
 
 	override bool OnItemSelected(Widget w, int x, int y, int row, int column, int oldRow, int oldColumn)
@@ -210,6 +220,25 @@ class HOD_XMLSearchForm : JMFormBase
 		if (!e || m_Selected < 0 || m_Selected >= res.entries.Count() || res.entries[m_Selected].name != e.name)
 			return null;
 		return e;
+	}
+
+	void Click_ShowOnMap(UIEvent eid, UIActionBase action)
+	{
+		if (eid != UIEvent.CLICK)
+			return;
+		string cls = "";
+		HOD_TypeEntry e = CurrentDetail();
+		if (e)
+			cls = e.name;
+		else
+		{
+			cls = m_Search.GetText();
+			cls.TrimInPlace();
+		}
+		if (cls == "")
+			return;
+		// ZenCOT's tracker answers with markers and opens the COT map
+		GetRPCManager().SendRPC("ZenCOT_RPC", "RPC_ZenShowOnMapRequest", new Param1<string>(cls), true);
 	}
 
 	void Click_CopyName(UIEvent eid, UIActionBase action)

@@ -72,8 +72,46 @@ modded class JMWindowBase
 		HOD_ApplyRect(margin, margin, w, h);
 	}
 
+	// Forms built with fixed pixel panels (e.g. Expansion's territory menu has a 1081x600
+	// map container) don't follow the window. Any fixed-size descendant whose on-screen size
+	// equals the old form size is resized with it; percentage children then follow on their own.
+	protected void HOD_ResizePinned(Widget parent, float oldW, float oldH, float newW, float newH, int depth)
+	{
+		if (!parent || depth > 3)
+			return;
+		Widget child = parent.GetChildren();
+		while (child)
+		{
+			int flags = child.GetFlags();
+			bool exactW = (flags & WidgetFlags.HEXACTSIZE) != 0;
+			bool exactH = (flags & WidgetFlags.VEXACTSIZE) != 0;
+			if (exactW || exactH)
+			{
+				float sw, sh;
+				child.GetScreenSize(sw, sh);
+				if (Math.AbsFloat(sw - oldW) < 3 && Math.AbsFloat(sh - oldH) < 3)
+				{
+					float cw, ch;
+					child.GetSize(cw, ch);
+					if (exactW)
+						cw = newW;
+					if (exactH)
+						ch = newH;
+					child.SetSize(cw, ch);
+				}
+			}
+			HOD_ResizePinned(child, oldW, oldH, newW, newH, depth + 1);
+			child = child.GetSibling();
+		}
+	}
+
 	protected void HOD_ApplyRect(float x, float y, float w, float h)
 	{
+		float oldW = 0;
+		float oldH = 0;
+		if (m_FormRoot)
+			m_FormRoot.GetScreenSize(oldW, oldH);
+
 		layoutRoot.SetSize(w, h);
 		layoutRoot.SetPos(x, y, true);
 
@@ -81,7 +119,11 @@ modded class JMWindowBase
 		if (m_ContentWidget)
 			m_ContentWidget.SetSize(w, contentH);
 		if (m_FormRoot)
+		{
 			m_FormRoot.SetSize(w, contentH);
+			if (oldW > 0 && oldH > 0)
+				HOD_ResizePinned(m_FormRoot, oldW, oldH, w, contentH, 0);
+		}
 		if (m_ConfirmationPanel)
 			m_ConfirmationPanel.SetSize(w, contentH);
 		if (m_TitleWrapper)

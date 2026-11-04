@@ -75,8 +75,10 @@ class HOD_ObjectBuilderForm : JMFormBase
 		m_Search = UIActionManager.CreateEditableText(search, "Search:", this, "Change_Search");
 
 		Widget edit = layoutRoot.FindAnyWidget("edit_wrapper");
-		UIActionButton place = UIActionManager.CreateButton(edit, "Place at crosshair", this, "Click_Place");
+		Widget addRow = UIActionManager.CreateGridSpacer(edit, 1, 2);
+		UIActionButton place = UIActionManager.CreateButton(addRow, "Place at crosshair", this, "Click_Place");
 		place.SetColor(COLOR_GREEN);
+		UIActionButton copyObj = UIActionManager.CreateButton(addRow, "Copy object at crosshair", this, "Click_CopyCursorObject");
 		m_SelectedText = UIActionManager.CreateText(edit, "Selected:", "none");
 		m_PosEdit = UIActionManager.CreateEditableVector(edit, "Pos", this, "Click_SetPos", "Set");
 		m_OriEdit = UIActionManager.CreateEditableVector(edit, "Ori", this, "Click_SetOri", "Set");
@@ -325,12 +327,30 @@ class HOD_ObjectBuilderForm : JMFormBase
 		}
 	}
 
-	protected void PlaceSelectedClass()
+	// selected search result, or the typed text if it's an exact class name
+	protected string ChosenClass()
 	{
 		int row = m_ClassList.GetSelectedRow();
-		if (row < 0 || row >= m_ClassRows.Count())
+		if (row >= 0 && row < m_ClassRows.Count())
+			return m_ClassRows[row];
+		string typed = m_Search.GetText();
+		typed.TrimInPlace();
+		if (typed != "" && (GetGame().ConfigIsExisting("CfgVehicles " + typed) || GetGame().ConfigIsExisting("CfgNonAIVehicles " + typed)))
+			return typed;
+		return "";
+	}
+
+	protected void PlaceSelectedClass()
+	{
+		string cls = ChosenClass();
+		if (cls == "")
 		{
-			COTCreateLocalAdminNotification(new StringLocaliser("Pick a class from the search list first"));
+			COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: pick a class from the list, or type an exact class name"));
+			return;
+		}
+		if (!m_Module.m_ClientSet)
+		{
+			COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: open or create a set first (double-click it in the list)"));
 			return;
 		}
 		vector ori = "0 0 0";
@@ -340,7 +360,43 @@ class HOD_ObjectBuilderForm : JMFormBase
 			vector pOri = player.GetOrientation();
 			ori[0] = pOri[0];
 		}
-		m_Module.Client_AddObject(m_ClassRows[row], GetCursorPos(), ori);
+		m_Module.Client_AddObject(cls, GetCursorPos(), ori);
+		COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: placing " + cls + " in " + m_Module.m_ClientSet.name));
+	}
+
+	// Add a copy of the world object under the crosshair (same class, position and rotation)
+	void Click_CopyCursorObject(UIEvent eid, UIActionBase action)
+	{
+		if (eid != UIEvent.CLICK)
+			return;
+		vector from = GetGame().GetCurrentCameraPosition();
+		vector to = from + GetGame().GetCurrentCameraDirection() * 300;
+		vector hitPos;
+		vector hitNormal;
+		int component;
+		set<Object> hits = new set<Object>();
+		DayZPhysics.RaycastRV(from, to, hitPos, hitNormal, component, hits, null, GetGame().GetPlayer(), false, false, ObjIntersectView, 0.0);
+		Object obj = null;
+		if (hits.Count() > 0)
+			obj = hits.Get(0);
+		if (!obj || obj.IsMan())
+		{
+			COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: no object under the crosshair"));
+			return;
+		}
+		string cls = obj.GetType();
+		if (cls == "" || (!GetGame().ConfigIsExisting("CfgVehicles " + cls) && !GetGame().ConfigIsExisting("CfgNonAIVehicles " + cls)))
+		{
+			COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: '" + obj.GetDebugNameNative() + "' has no spawnable class (map-baked object)"));
+			return;
+		}
+		if (!m_Module.m_ClientSet)
+		{
+			COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: open or create a set first"));
+			return;
+		}
+		m_Module.Client_AddObject(cls, obj.GetPosition(), obj.GetOrientation());
+		COTCreateLocalAdminNotification(new StringLocaliser("Object Builder: copied " + cls));
 	}
 
 	// ------------------------------------------------------------ buttons
