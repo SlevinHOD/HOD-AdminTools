@@ -21,21 +21,34 @@ class HOD_TypeEntry
 	string raw;
 }
 
+// compact search hit - full details are fetched per item (keeps RPCs small)
+class HOD_TypeBrief
+{
+	string name;
+	int nominal;
+	int min;
+}
+
 class HOD_TypeResults
 {
 	string query;
 	int total;
-	ref array<ref HOD_TypeEntry> entries = new array<ref HOD_TypeEntry>();
+	int indexed;
+	int files;
+	int unreadable;
+	ref array<ref HOD_TypeBrief> entries = new array<ref HOD_TypeBrief>();
 }
 
 class HOD_XMLSearchModule : JMRenderableModuleBase
 {
 	static const string PERM_VIEW = "HOD.XMLSearch.View";
 	static const string RPC_NS = "HOD_XML";
-	static const int MAX_RESULTS = 150;
+	static const int MAX_RESULTS = 100;
 
 	protected ref array<ref HOD_TypeEntry> m_Types;     // server
 	protected ref map<string, int> m_SeenFiles;         // server
+	protected int m_Unreadable;                         // server
+	ref HOD_TypeEntry m_ClientDetail;                   // client
 	ref HOD_TypeResults m_ClientResults;                // client
 
 	void HOD_XMLSearchModule()
@@ -44,7 +57,9 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 		m_ClientResults = new HOD_TypeResults();
 		GetRPCManager().AddRPC(RPC_NS, "Search", this, SingleplayerExecutionType.Server);
 		GetRPCManager().AddRPC(RPC_NS, "Reload", this, SingleplayerExecutionType.Server);
+		GetRPCManager().AddRPC(RPC_NS, "Detail", this, SingleplayerExecutionType.Server);
 		GetRPCManager().AddRPC(RPC_NS, "Results", this, SingleplayerExecutionType.Client);
+		GetRPCManager().AddRPC(RPC_NS, "DetailData", this, SingleplayerExecutionType.Client);
 	}
 
 	override bool HasAccess()
@@ -80,6 +95,7 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 			return;
 		m_Types = new array<ref HOD_TypeEntry>();
 		m_SeenFiles = new map<string, int>();
+		m_Unreadable = 0;
 		ParseTypesFile("db/types.xml");
 		ParseEconomyCore();
 		Print("[HOD] XML search indexed " + m_Types.Count() + " types");
@@ -164,6 +180,7 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 		if (xml == "")
 		{
 			Print("[HOD] XML search: can't read $mission:" + relPath);
+			m_Unreadable++;
 			return;
 		}
 
@@ -278,6 +295,9 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 		q.TrimInPlace();
 		HOD_TypeResults res = new HOD_TypeResults();
 		res.query = p.param1;
+		res.indexed = m_Types.Count();
+		res.files = m_SeenFiles.Count();
+		res.unreadable = m_Unreadable;
 		if (q.Length() >= 2)
 		{
 			foreach (HOD_TypeEntry e : m_Types)
@@ -288,13 +308,40 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 					continue;
 				res.total++;
 				if (res.entries.Count() < MAX_RESULTS)
-					res.entries.Insert(e);
+				{
+					HOD_TypeBrief b = new HOD_TypeBrief();
+					b.name = e.name;
+					b.nominal = e.nominal;
+					b.min = e.min;
+					res.entries.Insert(b);
+				}
 			}
 		}
 		JsonSerializer js = new JsonSerializer();
 		string json;
 		js.WriteToString(res, false, json);
 		GetRPCManager().SendRPC(RPC_NS, "Results", new Param1<string>(json), true, sender);
+	}
+
+	void Detail(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
+	{
+		Param1<string> p;
+		if (type != CallType.Server || !ctx.Read(p))
+			return;
+		JMPlayerInstance inst;
+		if (!GetPermissionsManager().HasPermission(PERM_VIEW, sender, inst))
+			return;
+		Server_EnsureLoaded();
+		foreach (HOD_TypeEntry e : m_Types)
+		{
+			if (e.name != p.param1)
+				continue;
+			JsonSerializer js = new JsonSerializer();
+			string json;
+			js.WriteToString(e, false, json);
+			GetRPCManager().SendRPC(RPC_NS, "DetailData", new Param1<string>(json), true, sender);
+			return;
+		}
 	}
 
 	void Reload(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
@@ -325,6 +372,27 @@ class HOD_XMLSearchModule : JMRenderableModuleBase
 		HOD_XMLSearchForm form;
 		if (Class.CastTo(form, GetForm()))
 			form.ShowResults();
+	}
+
+	void DetailData(CallType type, ParamsReadContext ctx, PlayerIdentity sender, Object target)
+	{
+		Param1<string> p;
+		if (type != CallType.Client || !ctx.Read(p))
+			return;
+		HOD_TypeEntry e = new HOD_TypeEntry();
+		JsonSerializer js = new JsonSerializer();
+		string err;
+		if (!js.ReadFromString(e, p.param1, err))
+			return;
+		m_ClientDetail = e;
+		HOD_XMLSearchForm form;
+		if (Class.CastTo(form, GetForm()))
+			form.ShowDetailEntry(e);
+	}
+
+	void Client_Detail(string name)
+	{
+		GetRPCManager().SendRPC(RPC_NS, "Detail", new Param1<string>(name), true);
 	}
 
 	void Client_Search(string q)

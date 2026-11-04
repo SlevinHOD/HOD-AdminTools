@@ -42,19 +42,33 @@ class HOD_XMLSearchForm : JMFormBase
 		string q = m_Search.GetText();
 		q.TrimInPlace();
 		if (q.Length() >= 3)
-			m_Module.Client_Search(q);
+			DoSearch(q);
+	}
+
+	protected void DoSearch(string q)
+	{
+		q.TrimInPlace();
+		if (q.Length() < 2)
+		{
+			m_Count.SetText("type at least 2 letters");
+			return;
+		}
+		m_Count.SetText("searching '" + q + "' ...");
+		m_Module.Client_Search(q);
 	}
 
 	void Click_Search(UIEvent eid, UIActionBase action)
 	{
 		if (eid == UIEvent.CLICK)
-			m_Module.Client_Search(m_Search.GetText());
+			DoSearch(m_Search.GetText());
 	}
 
 	void Click_Reload(UIEvent eid, UIActionBase action)
 	{
-		if (eid == UIEvent.CLICK)
-			m_Module.Client_Reload();
+		if (eid != UIEvent.CLICK)
+			return;
+		m_Count.SetText("re-reading types files ...");
+		m_Module.Client_Reload();
 	}
 
 	void ShowResults()
@@ -62,22 +76,31 @@ class HOD_XMLSearchForm : JMFormBase
 		HOD_TypeResults res = m_Module.m_ClientResults;
 		m_Results.ClearItems();
 		m_Selected = -1;
-		foreach (HOD_TypeEntry e : res.entries)
+		foreach (HOD_TypeBrief b : res.entries)
+			m_Results.AddItem(b.name + "   n" + Num(b.nominal) + " / m" + Num(b.min), null, 0);
+
+		string info = string.Format("  [%1 types from %2 file(s)", res.indexed, res.files);
+		if (res.unreadable > 0)
+			info += ", " + res.unreadable.ToString() + " unreadable";
+		info += "]";
+		if (res.indexed == 0)
 		{
-			string line = e.name + "   n" + Num(e.nominal) + " / m" + Num(e.min);
-			m_Results.AddItem(line, null, 0);
+			m_Count.SetText("No types loaded - couldn't read db/types.xml or cfgeconomycore.xml in the mission folder");
 		}
-		string shown = res.total.ToString();
-		if (res.total > res.entries.Count())
-			shown = res.entries.Count().ToString() + " of " + res.total.ToString();
-		m_Count.SetText(shown + " match(es) for '" + res.query + "'");
+		else
+		{
+			string shown = res.total.ToString();
+			if (res.total > res.entries.Count())
+				shown = res.entries.Count().ToString() + " of " + res.total.ToString();
+			m_Count.SetText(shown + " match(es) for '" + res.query + "'" + info);
+		}
 		if (res.entries.Count() > 0)
 		{
 			m_Results.SelectRow(0);
-			ShowDetails(0);
+			SelectRow(0);
 		}
 		else
-			ShowDetails(-1);
+			ShowDetailEntry(null);
 	}
 
 	static string Num(int v)
@@ -98,18 +121,22 @@ class HOD_XMLSearchForm : JMFormBase
 		return seconds.ToString() + " s";
 	}
 
-	protected HOD_TypeEntry Entry(int i)
-	{
-		HOD_TypeResults res = m_Module.m_ClientResults;
-		if (i < 0 || i >= res.entries.Count())
-			return null;
-		return res.entries[i];
-	}
-
-	protected void ShowDetails(int i)
+	protected void SelectRow(int i)
 	{
 		m_Selected = i;
-		HOD_TypeEntry e = Entry(i);
+		HOD_TypeResults res = m_Module.m_ClientResults;
+		if (i < 0 || i >= res.entries.Count())
+		{
+			ShowDetailEntry(null);
+			return;
+		}
+		ShowDetailEntry(null);
+		m_Details[0].SetText(res.entries[i].name + "  (loading...)");
+		m_Module.Client_Detail(res.entries[i].name);
+	}
+
+	void ShowDetailEntry(HOD_TypeEntry e)
+	{
 		if (!e)
 		{
 			foreach (UIActionText t : m_Details)
@@ -134,15 +161,24 @@ class HOD_XMLSearchForm : JMFormBase
 	{
 		if (w == m_Results)
 		{
-			ShowDetails(row);
+			SelectRow(row);
 			return true;
 		}
 		return false;
 	}
 
+	protected HOD_TypeEntry CurrentDetail()
+	{
+		HOD_TypeEntry e = m_Module.m_ClientDetail;
+		HOD_TypeResults res = m_Module.m_ClientResults;
+		if (!e || m_Selected < 0 || m_Selected >= res.entries.Count() || res.entries[m_Selected].name != e.name)
+			return null;
+		return e;
+	}
+
 	void Click_CopyName(UIEvent eid, UIActionBase action)
 	{
-		HOD_TypeEntry e = Entry(m_Selected);
+		HOD_TypeEntry e = CurrentDetail();
 		if (eid != UIEvent.CLICK || !e)
 			return;
 		GetGame().CopyToClipboard(e.name);
@@ -151,7 +187,7 @@ class HOD_XMLSearchForm : JMFormBase
 
 	void Click_CopyXml(UIEvent eid, UIActionBase action)
 	{
-		HOD_TypeEntry e = Entry(m_Selected);
+		HOD_TypeEntry e = CurrentDetail();
 		if (eid != UIEvent.CLICK || !e)
 			return;
 		GetGame().CopyToClipboard(e.raw);

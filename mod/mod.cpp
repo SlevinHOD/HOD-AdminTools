@@ -8,4 +8,4 @@ overview = "House of D admin tools for DayZ: a fork of Community Online Tools (J
 action = "https://github.com/SlevinHOD/HOD-AdminTools";
 author = "House of D";
 authorID = "0";
-version = "0.2.3-test";
+version = "0.2.4-test";
