@@ -61,19 +61,19 @@ class HOD_StatsBar : ScriptedWidgetEventHandler
 		Class.CastTo(m_Target, m_Root.FindAnyWidget("tx_target"));
 		Class.CastTo(m_Fps, m_Root.FindAnyWidget("tx_fps"));
 		Class.CastTo(m_Time, m_Root.FindAnyWidget("tx_time"));
-		m_God = Icon("ic_god", "shield", COLOR_OFF);
-		m_Invis = Icon("ic_invis", "eye-off", COLOR_OFF);
-		m_Esp = Icon("ic_esp", "radar", COLOR_OFF);
-		m_Cam = Icon("ic_cam", "video", COLOR_OFF);
-		m_Ammo = Icon("ic_ammo", "infinity", COLOR_OFF);
-		Icon("ic_players", "users", COLOR_ICON);
-		Icon("ic_pos", "map-pin", COLOR_ICON);
-		Icon("ic_target", "crosshair", COLOR_ICON);
-		Icon("ic_fps", "gauge", COLOR_ICON);
-		Icon("ic_time", "clock", COLOR_ICON);
-		Icon("hud_grip_img", "grip-vertical", COLOR_ON);
-		Icon("bt_copypos_img", "copy", COLOR_ON);
-		Icon("bt_copytarget_img", "copy", COLOR_ON);
+		m_God = HOD_SetIcon("ic_god", "shield", COLOR_OFF);
+		m_Invis = HOD_SetIcon("ic_invis", "eye-off", COLOR_OFF);
+		m_Esp = HOD_SetIcon("ic_esp", "radar", COLOR_OFF);
+		m_Cam = HOD_SetIcon("ic_cam", "video", COLOR_OFF);
+		m_Ammo = HOD_SetIcon("ic_ammo", "infinity", COLOR_OFF);
+		HOD_SetIcon("ic_players", "users", COLOR_ICON);
+		HOD_SetIcon("ic_pos", "map-pin", COLOR_ICON);
+		HOD_SetIcon("ic_target", "crosshair", COLOR_ICON);
+		HOD_SetIcon("ic_fps", "gauge", COLOR_ICON);
+		HOD_SetIcon("ic_time", "clock", COLOR_ICON);
+		HOD_SetIcon("hud_grip_img", "grip-vertical", COLOR_ON);
+		HOD_SetIcon("bt_copypos_img", "copy", COLOR_ON);
+		HOD_SetIcon("bt_copytarget_img", "copy", COLOR_ON);
 
 		m_Grip = m_Root.FindAnyWidget("hud_grip");
 		m_CopyPos = m_Root.FindAnyWidget("bt_copypos");
@@ -95,7 +95,7 @@ class HOD_StatsBar : ScriptedWidgetEventHandler
 			m_Root.Unlink();
 	}
 
-	protected ImageWidget Icon(string name, string icon, int color)
+	protected ImageWidget HOD_SetIcon(string name, string icon, int color)
 	{
 		ImageWidget img;
 		if (!Class.CastTo(img, m_Root.FindAnyWidget(name)))

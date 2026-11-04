@@ -52,6 +52,9 @@ def strip(src):
     return "".join(out)
 
 
+METHOD = re.compile(r"\s*(?:(?:override|static|protected|private|proto|native|owned|ref|const)\s+)*[A-Za-z_]\w*(?:<[^>]*>)?\s+([A-Za-z_]\w*)\s*\(")
+
+
 def main():
     errors = []
     classes = {}
@@ -72,6 +75,7 @@ def main():
             continue
         stripped[path] = (mod, s)
         stack = []
+        cur_classes = set()
         pairs = {")": "(", "]": "[", "}": "{"}
         for ln, line in enumerate(s.split("\n"), 1):
             for ch in line:
@@ -95,6 +99,14 @@ def main():
                         errors.append(f"{path}:{ln}: identifier '{name}' is also a type name")
                     elif name[:1].isupper() and not name.isupper() and not line.strip().startswith(("class ", "modded class", "enum ")):
                         errors.append(f"{path}:{ln}: PascalCase variable '{name}' - use camelCase (avoids clashes with other mods' types)")
+            # method declared with a type's name (e.g. 'Icon' clashes with vanilla class Icon); ctors allowed
+            if not any(t in path for t in THIRD_PARTY):
+                mm = METHOD.match(line)
+                if mm and mm.group(1) in KNOWN_TYPES and mm.group(1) not in cur_classes:
+                    errors.append(f"{path}:{ln}: method '{mm.group(1)}' is also a type name")
+            cm = re.match(r"\s*(?:modded\s+)?class\s+(\w+)", line)
+            if cm:
+                cur_classes.add(cm.group(1))
         if stack:
             errors.append(f"{path}: unclosed '{stack[-1][0]}' from line {stack[-1][1]}")
         for m in re.finditer(r"^\s*(modded\s+)?class\s+(\w+)", s, re.M):
